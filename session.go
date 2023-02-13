@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 
@@ -18,6 +17,8 @@ import (
 	"bytes"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 type Lock struct {
@@ -274,7 +275,7 @@ func (sessionInfo *SessionInfo) GetPacketBuf(citiId uint32, packSize uint16) []b
 		if citi := sessionInfo.getCiti(citiId); citi != nil {
 			buf := citi.ringBufR.getCur()
 			if len(buf) < int(packSize) {
-				log.Fatal("illegal packet size -- ", len(buf))
+				log.Fatal().Msgf("illegal packet size: %d", len(buf))
 			}
 			return buf[:packSize]
 		}
@@ -446,7 +447,7 @@ func (info *SessionInfo) addCiti(conn io.ReadWriteCloser, citiId uint32) *ConnIn
 		citiId = info.nextCtitId
 		info.nextCtitId++
 		if info.nextCtitId <= CITIID_USR {
-			log.Fatal("info.nextCtitId is overflow")
+			log.Fatal().Msg("info.nextCtitId is overflow")
 		}
 	}
 
@@ -539,7 +540,7 @@ func (sessionInfo *SessionInfo) SetReWrite(readNo int64) {
 	} else {
 		// こちらが送信したパケット数よりも相手が受け取ったパケット数が多い場合、
 		// そんなことはありえないのでエラー
-		log.Fatal("mismatch WriteNo")
+		log.Fatal().Msg("mismatch WriteNo")
 	}
 }
 
@@ -1026,7 +1027,7 @@ func rewirte2Tunnel(info *pipeInfo, connInfoRev *ConnInfoRev) bool {
 			}
 		}
 		if item == nil {
-			log.Fatal("not found packet ", sessionInfo.ReWriteNo)
+			log.Fatal().Msgf("not found packet, RewriteNo: %d", sessionInfo.ReWriteNo)
 		}
 	}
 	return true
@@ -1126,14 +1127,14 @@ func bin2Ctrl(sessionInfo *SessionInfo, buf []byte) {
 	case CTRL_HEADER:
 		header := ConnHeader{}
 		if err := json.NewDecoder(&buffer).Decode(&header); err != nil {
-			log.Fatal("failed to read header ", err)
+			log.Fatal().Msgf("failed to read header: %v", err)
 		}
 		log.Print("header ", header)
 		sessionInfo.ctrlInfo.header <- &header
 	case CTRL_RESP_HEADER:
 		resp := CtrlRespHeader{}
 		if err := json.NewDecoder(&buffer).Decode(&resp); err != nil {
-			log.Fatal("failed to read header ", err)
+			log.Fatal().Msgf("failed to read header: %v", err)
 		}
 		log.Print("resp ", resp)
 		if citi := sessionInfo.getCiti(resp.CitiId); citi != nil {
@@ -1367,7 +1368,7 @@ func writePack(
 		writeerr = WriteDummy(stream)
 		validPost = false
 	default:
-		log.Fatalf("illegal kind -- %d", packet.kind)
+		log.Fatal().Msgf("illegal kind: %d", packet.kind)
 	}
 
 	if validPost && writeerr == nil {
@@ -1425,7 +1426,7 @@ func packetWriter(info *pipeInfo) {
 			if cont, err := writePack(
 				&PackInfo{packet.bytes, PACKET_KIND_NORMAL_DIRECT, packet.citiId},
 				&buffer, connInfoRev.connInfo, true); err != nil {
-				log.Fatal("writePack -- ", err)
+				log.Fatal().Msgf("writePack error: %v", err)
 			} else if !cont {
 				end = true
 				break
@@ -1680,7 +1681,7 @@ func NewListenWithMaker(
 			!isClient && forwardInfo.IsReverseTunnel {
 			local, err := listenMaker(forwardInfo.Src.toStr())
 			if err != nil {
-				log.Fatal(err)
+				log.Fatal().Err(err)
 				return nil, []ForwardInfo{}
 			}
 			group.list = append(group.list, ListenInfo{local, forwardInfo})
@@ -1701,7 +1702,7 @@ func ListenNewConnectSub(
 			listenInfo.forwardInfo.Dst.toStr())
 		src, err := listenInfo.listener.Accept()
 		if err != nil {
-			log.Fatal(err)
+			log.Fatal().Err(err)
 		}
 		needClose := true
 		defer func() {

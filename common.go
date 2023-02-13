@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/url"
 	"os"
 	"strconv"
@@ -22,6 +21,8 @@ import (
 
 	"crypto/aes"
 	"crypto/cipher"
+
+	"github.com/rs/zerolog/log"
 )
 
 // 2byte の MAX。
@@ -140,10 +141,13 @@ func (mode *CryptMode) IsValid() bool {
 //
 // @param inbuf 処理対象のデータを保持するバッファ
 // @param outbuf 処理後のデータを格納するバッファ。
-//    nil を指定した場合 CryptMode の work に結果を格納する。
+//
+//	nil を指定した場合 CryptMode の work に結果を格納する。
+//
 // @return 処理後のデータを格納するバッファ。
-//   outbuf に nil 以外を指定した場合、 outbuf の slice を返す。
-//   outbuf に nil を指定した場合、CryptMode の work の slice を返す。
+//
+//	outbuf に nil 以外を指定した場合、 outbuf の slice を返す。
+//	outbuf に nil を指定した場合、CryptMode の work の slice を返す。
 func (mode *CryptMode) Process(inbuf []byte, outbuf []byte) []byte {
 	work := outbuf
 	if outbuf == nil {
@@ -220,7 +224,7 @@ func WriteSimpleKind(ostream io.Writer, kind int8, citiId uint32, buf []byte) er
 	case PACKET_KIND_SYNC:
 		kindbuf = syncKindBuf
 	default:
-		log.Fatal("illegal kind -- ", kind)
+		log.Fatal().Msgf("illegal kind: %d", kind)
 	}
 
 	var buffer bytes.Buffer
@@ -385,7 +389,7 @@ func ReadItem(
 			packBuf = make([]byte, packSize)
 		} else {
 			if len(workBuf) < int(packSize) {
-				log.Fatal("workbuf size is short -- ", len(workBuf))
+				log.Fatal().Msgf("workbuf size is short: %d", len(workBuf))
 			}
 			citiPackBuf = citiBuf.GetPacketBuf(item.citiId, packSize)
 			if ctrl == nil || !ctrl.dec.IsValid() {

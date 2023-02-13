@@ -10,10 +10,10 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
-	"log"
 	"net"
 	"net/url"
 
+	"github.com/rs/zerolog/log"
 	"golang.org/x/net/proxy"
 	"golang.org/x/net/websocket"
 )

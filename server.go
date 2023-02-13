@@ -4,11 +4,11 @@ package main
 import (
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"golang.org/x/net/websocket"
 )
 
@@ -17,13 +17,13 @@ func StartBotServer(serverInfo HostInfo) {
 	log.Print("start echo --- ", server)
 	local, err := net.Listen("tcp", server)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal().Err(err)
 	}
 	defer local.Close()
 	for {
 		conn, err := local.Accept()
 		if err != nil {
-			log.Fatal(err)
+			log.Fatal().Err(err)
 		}
 		log.Print("connected")
 		bot := func() {
@@ -54,13 +54,13 @@ func StartEchoServer(serverInfo HostInfo) {
 	log.Print("start echo --- ", server)
 	local, err := net.Listen("tcp", server)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal().Err(err)
 	}
 	defer local.Close()
 	for {
 		conn, err := local.Accept()
 		if err != nil {
-			log.Fatal(err)
+			log.Fatal().Err(err)
 		}
 		log.Print("connected")
 		go func(tunnel net.Conn) {
@@ -74,7 +74,7 @@ func StartEchoServer(serverInfo HostInfo) {
 func StartHeavyClient(serverInfo HostInfo) {
 	conn, err := net.Dial("tcp", serverInfo.toStr())
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal().Err(err)
 	}
 	defer conn.Close()
 
@@ -91,7 +91,7 @@ func StartHeavyClient(serverInfo HostInfo) {
 	write := func() {
 		for {
 			if size, err := conn.Write(dummy); err != nil {
-				log.Fatal(err)
+				log.Fatal().Err(err)
 			} else {
 				writeCount += uint64(size)
 			}
@@ -100,15 +100,13 @@ func StartHeavyClient(serverInfo HostInfo) {
 	read := func() {
 		for {
 			if size, err := io.ReadFull(conn, dummy); err != nil {
-				log.Fatal(err)
+				log.Fatal().Err(err)
 			} else {
 				readCount += uint64(size)
 			}
 			for index := 0; index < len(dummy); index++ {
 				if dummy[index] != byte(index) {
-					log.Fatalf(
-						"unmatch -- %d %d %X %X",
-						readCount, index, dummy[index], byte(index))
+					log.Fatal().Msgf("unmatch -- %d %d %X %X", readCount, index, dummy[index], byte(index))
 				}
 			}
 		}
@@ -166,7 +164,7 @@ func listenTcpServer(
 	process func(*ConnInfo, *ListenGroup, []ForwardInfo)) {
 	conn, err := local.Accept()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal().Err(err)
 	}
 
 	go processTcpServer(conn, param, forwardList, process)
@@ -176,7 +174,7 @@ func StartServer(param *TunnelParam, forwardList []ForwardInfo) {
 	log.Print("waiting --- ", param.serverInfo.toStr())
 	local, err := net.Listen("tcp", param.serverInfo.toStr())
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal().Err(err)
 	}
 	defer local.Close()
 
@@ -195,7 +193,7 @@ func StartReverseServer(param *TunnelParam, forwardList []ForwardInfo) {
 	log.Print("waiting reverse --- ", param.serverInfo.toStr())
 	local, err := net.Listen("tcp", param.serverInfo.toStr())
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal().Err(err)
 	}
 	defer local.Close()
 

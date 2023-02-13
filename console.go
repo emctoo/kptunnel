@@ -14,7 +14,8 @@ import (
 	//"strconv"
 	//	"context"
 	"bufio"
-	"log"
+
+	"github.com/rs/zerolog/log"
 )
 
 func StartConsole(hostInfo HostInfo) {
@@ -22,13 +23,13 @@ func StartConsole(hostInfo HostInfo) {
 	log.Print("start console --- ", server)
 	local, err := net.Listen("tcp", server)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal().Err(err)
 	}
 	defer local.Close()
 	for {
 		conn, err := local.Accept()
 		if err != nil {
-			log.Fatal(err)
+			log.Fatal().Err(err)
 		}
 		log.Print("console connected")
 		go func(stream net.Conn) {

@@ -1,3 +1,4 @@
+//go:build !wasm
 // +build !wasm
 
 // -*- coding: utf-8 -*-
@@ -6,10 +7,11 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"net"
 	//"time"
 	//"io"
+
+	"github.com/rs/zerolog/log"
 )
 
 func connectTunnel(

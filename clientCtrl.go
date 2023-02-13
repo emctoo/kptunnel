@@ -1,14 +1,15 @@
-//-*- coding: utf-8 -*-
+// -*- coding: utf-8 -*-
 package main
 
 import (
 	"fmt"
-	"log"
 	"net"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/rs/zerolog/log"
 )
 
 var controlMutex = new(sync.Mutex)

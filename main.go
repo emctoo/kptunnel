@@ -1,3 +1,4 @@
+//go:build !wasm
 // +build !wasm
 
 // -*- coding: utf-8 -*-
@@ -7,22 +8,45 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	_ "net/http/pprof"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 const VERSION = "0.2.0"
 
 func main() {
+	// UNIX Time is faster and smaller than most timestamps
+	// zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+	// zerolog.TimeFieldFormat = time.RFC3339Nano
+	zerolog.TimeFieldFormat = "2006-01-02T15:04:05.999Z07:00"
+
+	zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	// short filename:lineno format, instead of full path
+	zerolog.CallerMarshalFunc = func(pc uintptr, file string, line int) string {
+		short := file
+		for i := len(file) - 1; i > 0; i-- {
+			if file[i] == '/' {
+				short = file[i+1:]
+				break
+			}
+		}
+		file = short
+		return file + ":" + strconv.Itoa(line)
+	}
+	runLogFile, _ := os.OpenFile("/tmp/t.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0664)
+	multi := zerolog.MultiLevelWriter(os.Stdout, runLogFile)
+	log.Logger = zerolog.New(multi).With().Caller().Timestamp().Logger()
 
 	if BUFSIZE >= 65536 {
 		fmt.Printf("BUFSIZE is illegal. -- ", 65536)
@@ -276,7 +300,7 @@ func ParseOptServer(mode string, args []string) {
 	var cmd = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
 	param, forwardList, _ := ParseOpt(cmd, mode, args)
 
-	log.SetPrefix(fmt.Sprintf("%d: ", param.serverInfo.Port))
+	//log.SetPrefix(fmt.Sprintf("%d: ", param.serverInfo.Port))
 
 	switch mode {
 	case "server":
