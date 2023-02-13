@@ -106,10 +106,7 @@ func (info *proxyInfo) Dial(network, addr string) (net.Conn, error) {
 }
 
 // websocketUrl で示すサーバに websocket で接続する
-func ConnectWebScoket(
-	websocketUrl, proxyHost, userAgent string,
-	param *TunnelParam, sessionInfo *SessionInfo,
-	forwardList []ForwardInfo) ([]ForwardInfo, ReconnectInfo) {
+func ConnectWebSocket(websocketUrl, proxyHost, userAgent string, param *TunnelParam, sessionInfo *SessionInfo, forwardList []ForwardInfo) ([]ForwardInfo, ReconnectInfo) {
 	// websocketUrl := "ws://localhost:12345/echo"
 	// proxyHost := "http://localhost:10080"
 	// userAgent := "test"
@@ -165,10 +162,11 @@ func ConnectWebScoket(
 			return nil, ReconnectInfo{nil, true, err}
 		}
 	}
+
 	// websocket の送信データを binary で扱う設定
 	websock.PayloadType = websocket.BinaryFrame
-	connInfo := CreateConnInfo(
-		websock, param.encPass, param.encCount, sessionInfo, false)
+
+	connInfo := CreateConnInfo(websock, param.encPass, param.encCount, sessionInfo, false)
 	overrideForwardList := forwardList
 	cont := true
 	overrideForwardList, cont, err = ProcessClientAuth(connInfo, param, forwardList)

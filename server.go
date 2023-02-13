@@ -182,9 +182,7 @@ func StartServer(param *TunnelParam, forwardList []ForwardInfo) {
 		listenTcpServer(local, param, forwardList,
 			func(connInfo *ConnInfo,
 				listenGroup *ListenGroup, localForwardList []ForwardInfo) {
-				ListenAndNewConnect(
-					false, listenGroup, localForwardList,
-					connInfo, param, GetSessionConn)
+				ListenAndNewConnect(false, listenGroup, localForwardList, connInfo, param, GetSessionConn)
 			})
 	}
 }
@@ -198,13 +196,9 @@ func StartReverseServer(param *TunnelParam, forwardList []ForwardInfo) {
 	defer local.Close()
 
 	for {
-		listenTcpServer(local, param, forwardList,
-			func(connInfo *ConnInfo,
-				listenGroup *ListenGroup, localForwardList []ForwardInfo) {
-				ListenAndNewConnect(
-					false, listenGroup, localForwardList,
-					connInfo, param, GetSessionConn)
-			})
+		listenTcpServer(local, param, forwardList, func(connInfo *ConnInfo, listenGroup *ListenGroup, localForwardList []ForwardInfo) {
+			ListenAndNewConnect(false, listenGroup, localForwardList, connInfo, param, GetSessionConn)
+		})
 	}
 }
 
@@ -242,33 +236,27 @@ func (handler WrapWSHandler) ServeHTTP(w http.ResponseWriter, req *http.Request)
 	log.Printf("exit -- %v", req)
 }
 
-func execWebSocketServer(
-	param TunnelParam, forwardList []ForwardInfo,
-	connectSession func(*ConnInfo, *TunnelParam, *ListenGroup, []ForwardInfo)) {
-
+func execWebSocketServer(param TunnelParam, forwardList []ForwardInfo, connectSession func(*ConnInfo, *TunnelParam, *ListenGroup, []ForwardInfo)) {
 	// WebSocket 接続時のハンドラ
 	handle := func(ws *websocket.Conn, remoteAddr string) {
 		// binary データを扱うので BinaryFrame をセット
 		ws.PayloadType = websocket.BinaryFrame
 
 		connInfo := CreateConnInfo(ws, param.encPass, param.encCount, nil, true)
-		if _, retForwardList, err := ProcessServerAuth(
-			connInfo, &param, remoteAddr, forwardList); err != nil {
+		_, retForwardList, err := ProcessServerAuth(connInfo, &param, remoteAddr, forwardList)
+		if err != nil {
 			connInfo.SessionInfo.SetState(Session_state_authmiss)
 			log.Print("auth error: ", err)
 			time.Sleep(3 * time.Second)
 			return
-		} else {
-			listenGroup, localForwardList := NewListen(false, retForwardList)
-			defer listenGroup.Close()
-
-			connectSession(connInfo, &param, listenGroup, localForwardList)
 		}
+
+		listenGroup, localForwardList := NewListen(false, retForwardList)
+		defer listenGroup.Close()
+		connectSession(connInfo, &param, listenGroup, localForwardList)
 	}
 
-	wrapHandler := WrapWSHandler{handle, &param}
-
-	http.Handle("/", wrapHandler)
+	http.Handle("/", WrapWSHandler{handle, &param})
 	err := http.ListenAndServe(param.serverInfo.toStr(), nil)
 	if err != nil {
 		panic("ListenAndServe: " + err.Error())
@@ -278,25 +266,15 @@ func execWebSocketServer(
 func StartWebsocketServer(param *TunnelParam, forwardList []ForwardInfo) {
 	log.Print("start websocket -- ", param.serverInfo.toStr())
 
-	execWebSocketServer(
-		*param, forwardList,
-		func(connInfo *ConnInfo, tunnelParam *TunnelParam,
-			listenGroup *ListenGroup, localForwardList []ForwardInfo) {
-			ListenAndNewConnect(
-				false, listenGroup, localForwardList,
-				connInfo, tunnelParam, GetSessionConn)
-		})
+	execWebSocketServer(*param, forwardList, func(connInfo *ConnInfo, tunnelParam *TunnelParam, listenGroup *ListenGroup, localForwardList []ForwardInfo) {
+		ListenAndNewConnect(false, listenGroup, localForwardList, connInfo, tunnelParam, GetSessionConn)
+	})
 }
 
 func StartReverseWebSocketServer(param *TunnelParam, forwardList []ForwardInfo) {
 	log.Print("start reverse websocket -- ", param.serverInfo.toStr())
 
-	execWebSocketServer(
-		*param, forwardList,
-		func(connInfo *ConnInfo, tunnelParam *TunnelParam,
-			listenGroup *ListenGroup, localForwardList []ForwardInfo) {
-			ListenAndNewConnect(
-				false, listenGroup, localForwardList,
-				connInfo, tunnelParam, GetSessionConn)
-		})
+	execWebSocketServer(*param, forwardList, func(connInfo *ConnInfo, tunnelParam *TunnelParam, listenGroup *ListenGroup, localForwardList []ForwardInfo) {
+		ListenAndNewConnect(false, listenGroup, localForwardList, connInfo, tunnelParam, GetSessionConn)
+	})
 }

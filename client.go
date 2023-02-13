@@ -57,8 +57,7 @@ func StartClient(param *TunnelParam, forwardList []ForwardInfo) {
 					connectTunnel(param.serverInfo, &sessionParam, forwardList)
 				return reconnectInfo
 			})
-		ListenAndNewConnect(
-			true, listenGroup, localForwardList, reconnectInfo.Conn, &sessionParam, reconnect)
+		ListenAndNewConnect(true, listenGroup, localForwardList, reconnectInfo.Conn, &sessionParam, reconnect)
 
 		return true
 	}
@@ -88,8 +87,7 @@ func StartReverseClient(param *TunnelParam) {
 				_, reconnectInfo := connectTunnel(param.serverInfo, &sessionParam, nil)
 				return reconnectInfo
 			})
-		ListenAndNewConnect(
-			true, listenGroup, localForwardList, reconnectInfo.Conn, &sessionParam, reconnect)
+		ListenAndNewConnect(true, listenGroup, localForwardList, reconnectInfo.Conn, &sessionParam, reconnect)
 		return true
 	}
 
@@ -100,17 +98,15 @@ func StartReverseClient(param *TunnelParam) {
 	}
 }
 
-func StartWebSocketClient(
-	userAgent string, param *TunnelParam,
-	serverInfo HostInfo, proxyHost string, forwardList []ForwardInfo) {
-
+func StartWebSocketClient(userAgent string, param *TunnelParam, serverInfo HostInfo, proxyHost string, forwardList []ForwardInfo) {
 	sessionParam := *param
-	forwardList, reconnectInfo := ConnectWebScoket(
-		serverInfo.toStr(), proxyHost, userAgent, &sessionParam, nil, forwardList)
+	forwardList, reconnectInfo := ConnectWebSocket(serverInfo.toStr(), proxyHost, userAgent, &sessionParam, nil, forwardList)
 	if reconnectInfo.Err != nil {
 		return
 	}
-	defer reconnectInfo.Conn.Conn.Close()
+	defer func() {
+		_ = reconnectInfo.Conn.Conn.Close()
+	}()
 
 	listenGroup, localForwardList := NewListen(true, forwardList)
 	defer listenGroup.Close()
@@ -121,21 +117,14 @@ func StartWebSocketClient(
 	}
 	reconnectUrl += "mode=Reconnect"
 
-	reconnect := CreateToReconnectFunc(
-		func(sessionInfo *SessionInfo) ReconnectInfo {
-			_, reconnectInfo := ConnectWebScoket(
-				reconnectUrl, proxyHost, userAgent,
-				&sessionParam, sessionInfo, forwardList)
-			return reconnectInfo
-		})
-	ListenAndNewConnect(
-		true, listenGroup, localForwardList,
-		reconnectInfo.Conn, &sessionParam, reconnect)
+	reconnect := CreateToReconnectFunc(func(sessionInfo *SessionInfo) ReconnectInfo {
+		_, reconnectInfo := ConnectWebSocket(reconnectUrl, proxyHost, userAgent, &sessionParam, sessionInfo, forwardList)
+		return reconnectInfo
+	})
+	ListenAndNewConnect(true, listenGroup, localForwardList, reconnectInfo.Conn, &sessionParam, reconnect)
 }
 
-func StartReverseWebSocketClient(
-	userAgent string, param *TunnelParam, serverInfo HostInfo, proxyHost string) {
-
+func StartReverseWebSocketClient(userAgent string, param *TunnelParam, serverInfo HostInfo, proxyHost string) {
 	sessionParam := *param
 
 	reconnectUrl := serverInfo.toStr()
@@ -144,28 +133,24 @@ func StartReverseWebSocketClient(
 	}
 	reconnectUrl += "mode=Reconnect"
 
-	reconnect := CreateToReconnectFunc(
-		func(sessionInfo *SessionInfo) ReconnectInfo {
-			_, reconnectInfo := ConnectWebScoket(
-				reconnectUrl, proxyHost,
-				userAgent, &sessionParam, sessionInfo, nil)
-			return reconnectInfo
-		})
+	reconnect := CreateToReconnectFunc(func(sessionInfo *SessionInfo) ReconnectInfo {
+		_, reconnectInfo := ConnectWebSocket(reconnectUrl, proxyHost, userAgent, &sessionParam, sessionInfo, nil)
+		return reconnectInfo
+	})
 
 	process := func() {
-		forwardList, reconnectInfo := ConnectWebScoket(
-			serverInfo.toStr(), proxyHost, userAgent, &sessionParam, nil, []ForwardInfo{})
+		forwardList, reconnectInfo := ConnectWebSocket(serverInfo.toStr(), proxyHost, userAgent, &sessionParam, nil, []ForwardInfo{})
 		if reconnectInfo.Err != nil {
 			return
 		}
-		defer reconnectInfo.Conn.Conn.Close()
+		defer func() {
+			_ = reconnectInfo.Conn.Conn.Close()
+		}()
 
 		listenGroup, localForwardList := NewListen(true, forwardList)
 		defer listenGroup.Close()
 
-		ListenAndNewConnect(
-			true, listenGroup, localForwardList,
-			reconnectInfo.Conn, &sessionParam, reconnect)
+		ListenAndNewConnect(true, listenGroup, localForwardList, reconnectInfo.Conn, &sessionParam, reconnect)
 	}
 	for {
 		process()

@@ -1747,32 +1747,19 @@ func ListenNewConnectSub(
 // @param port 待ち受けるポート番号
 // @param parm トンネル情報
 // @param reconnect 再接続関数
-func ListenAndNewConnect(
-	isClient bool,
-	listenGroup *ListenGroup, localForwardList []ForwardInfo,
-	connInfo *ConnInfo, param *TunnelParam,
-	reconnect func(sessionInfo *SessionInfo) *ConnInfo) {
-
-	ListenAndNewConnectWithDialer(
-		isClient, listenGroup, localForwardList, connInfo, param, reconnect,
-		func(dst string) (io.ReadWriteCloser, error) {
-			log.Printf("dial -- %s", dst)
-			return net.Dial("tcp", dst)
-		})
+func ListenAndNewConnect(isClient bool, listenGroup *ListenGroup, localForwardList []ForwardInfo,
+	connInfo *ConnInfo, param *TunnelParam, reconnect func(sessionInfo *SessionInfo) *ConnInfo) {
+	ListenAndNewConnectWithDialer(isClient, listenGroup, localForwardList, connInfo, param, reconnect, func(dst string) (io.ReadWriteCloser, error) {
+		log.Printf("dial -- %s", dst)
+		return net.Dial("tcp", dst)
+	})
 }
 
-func ListenAndNewConnectWithDialer(
-	isClient bool,
-	listenGroup *ListenGroup, localForwardList []ForwardInfo,
-	connInfo *ConnInfo, param *TunnelParam,
-	reconnect func(sessionInfo *SessionInfo) *ConnInfo,
-	dialer func(dst string) (io.ReadWriteCloser, error)) {
-	log.Printf(
-		"ListenAndNewConnect -- %d, %d",
-		len(listenGroup.list), len(localForwardList))
+func ListenAndNewConnectWithDialer(isClient bool, listenGroup *ListenGroup, localForwardList []ForwardInfo, connInfo *ConnInfo, param *TunnelParam,
+	reconnect func(sessionInfo *SessionInfo) *ConnInfo, dialer func(dst string) (io.ReadWriteCloser, error)) {
+	log.Printf("ListenAndNewConnect -- %d, %d", len(listenGroup.list), len(localForwardList))
 
-	info := startRelaySession(
-		connInfo, param.keepAliveInterval, len(listenGroup.list) > 0, reconnect)
+	info := startRelaySession(connInfo, param.keepAliveInterval, len(listenGroup.list) > 0, reconnect)
 
 	for _, listenInfo := range listenGroup.list {
 		go ListenNewConnectSub(listenInfo, info)
