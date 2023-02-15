@@ -1,4 +1,4 @@
-module github.com/ifritJP/kptunnel
+module github.com/emctoo/kptunnel
 
 go 1.14
 

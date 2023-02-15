@@ -1,6 +1,6 @@
 // -*- coding: utf-8 -*-
-// Package helloworld provides a set of Cloud Functions samples.
-package main
+
+package kptunnel
 
 import (
 	//"encoding/json"
@@ -19,7 +19,7 @@ import (
 )
 
 func StartConsole(hostInfo HostInfo) {
-	server := hostInfo.toStr()
+	server := hostInfo.String()
 	log.Print("start console --- ", server)
 	local, err := net.Listen("tcp", server)
 	if err != nil {

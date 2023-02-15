@@ -1,5 +1,5 @@
 // -*- coding: utf-8 -*-
-package main
+package kptunnel
 
 import (
 	"container/list"
@@ -36,16 +36,16 @@ func (lock *Lock) rel() {
 	lock.mutex.Unlock()
 }
 
-var verboseFlag = false
+var VerboseFlag = false
 
 func IsVerbose() bool {
-	return verboseFlag
+	return VerboseFlag
 }
 
-var debugFlag = false
+var DebugFlag = false
 
 func IsDebug() bool {
-	return debugFlag
+	return DebugFlag
 }
 
 // tunnel 上に通す tcp の組み合わせ
@@ -58,40 +58,40 @@ type ForwardInfo struct {
 	Dst HostInfo
 }
 
-func (info *ForwardInfo) toStr() string {
-	kind := "t"
-	if info.IsReverseTunnel {
-		kind = "r"
-	}
-	return fmt.Sprint("%s:%s:%s", kind, info.Src.toStr(), info.Dst.toStr())
+func (info *ForwardInfo) String() string {
+	return fmt.Sprintf("ForwardInfo(reverse: %t, %s => %s)", info.IsReverseTunnel, info.Src.String(), info.Dst.String())
 }
 
-// tunnel の制御パラメータ
+// control parameters for tunnel
 type TunnelParam struct {
-	// セッションの認証用共通パスワード
-	pass *string
+	// common password for session authentication
+	Pass *string
 	// セッションのモード
 	Mode string
 	// 接続可能な IP パターン。
 	// nil の場合、 IP 制限しない。
-	maskedIP *MaskIP
+	MaskedIP *MaskIP
 	// セッションの通信を暗号化するパスワード
-	encPass *string
+	EncPass *string
 	// セッションの通信を暗号化する通信数。
 	// -1: 常に暗号化
 	//  0: 暗号化しない
 	//  N: 残り N 回の通信を暗号化する
-	encCount int
+	EncCount int
 	// 無通信を避けるための接続確認の間隔 (ミリ秒)
-	keepAliveInterval int
-	// magic
-	magic []byte
+	KeepAliveInterval int
+
+	Magic []byte
 	// CTRL_*
-	ctrl int
+	Ctrl int
 	// サーバ情報
-	serverInfo HostInfo
+	ServerInfo HostInfo
 	// websocket のリクエストヘッダに付加する情報
-	wsReqHeader http.Header
+	WsReqHeader http.Header
+}
+
+func (config TunnelParam) String() string {
+	return fmt.Sprintf("TunnelConfig(mode=%s, server=%s)", config.Mode, config.ServerInfo.String())
 }
 
 // セッションの再接続時に、
@@ -943,7 +943,7 @@ func tunnel2Stream(sessionInfo *SessionInfo, dst *ConnInTunnelInfo, fin chan boo
 		readSize := len(readBuf)
 
 		if IsDebug() {
-			log.Printf("tunnel2Stream -- %d, %s", dst.ReadNo, readSize)
+			log.Printf("tunnel2Stream -- %d, %d", dst.ReadNo, readSize)
 		}
 
 		if (dst.ReadNo % PACKET_NUM_BASE) == PACKET_NUM_BASE-1 {
@@ -1077,7 +1077,7 @@ func stream2Tunnel(src *ConnInTunnelInfo, info *pipeInfo, fin chan bool) {
 		src.WriteState = 30
 
 		if IsDebug() {
-			log.Printf("stream2Tunnel -- %d, %s", src.WriteNo, readSize)
+			log.Printf("stream2Tunnel -- %d, %d", src.WriteNo, readSize)
 		}
 
 		if readerr != nil {
@@ -1679,7 +1679,7 @@ func NewListenWithMaker(
 	for _, forwardInfo := range forwardList {
 		if isClient && !forwardInfo.IsReverseTunnel ||
 			!isClient && forwardInfo.IsReverseTunnel {
-			local, err := listenMaker(forwardInfo.Src.toStr())
+			local, err := listenMaker(forwardInfo.Src.String())
 			if err != nil {
 				log.Fatal().Err(err)
 				return nil, []ForwardInfo{}
@@ -1698,8 +1698,8 @@ func ListenNewConnectSub(
 
 	process := func() {
 		log.Printf("waiting with %s for %s\n",
-			listenInfo.forwardInfo.Src.toStr(),
-			listenInfo.forwardInfo.Dst.toStr())
+			listenInfo.forwardInfo.Src.String(),
+			listenInfo.forwardInfo.Dst.String())
 		src, err := listenInfo.listener.Accept()
 		if err != nil {
 			log.Fatal().Err(err)
@@ -1713,7 +1713,7 @@ func ListenNewConnectSub(
 
 		log.Printf(
 			"Accept -- %s -> %s",
-			listenInfo.forwardInfo.Src.toStr(), listenInfo.forwardInfo.Dst.toStr())
+			listenInfo.forwardInfo.Src.String(), listenInfo.forwardInfo.Dst.String())
 
 		citi := info.connInfo.SessionInfo.addCiti(src, CITIID_CTRL)
 		dst := listenInfo.forwardInfo.Dst
@@ -1732,7 +1732,7 @@ func ListenNewConnectSub(
 			go relaySession(info, citi, dst)
 			needClose = false
 		} else {
-			log.Printf("failed to connect -- %s:%s", dst.toStr(), respHeader.Mess)
+			log.Printf("failed to connect -- %s:%s", dst.String(), respHeader.Mess)
 		}
 	}
 
@@ -1759,7 +1759,7 @@ func ListenAndNewConnectWithDialer(isClient bool, listenGroup *ListenGroup, loca
 	reconnect func(sessionInfo *SessionInfo) *ConnInfo, dialer func(dst string) (io.ReadWriteCloser, error)) {
 	log.Printf("ListenAndNewConnect -- %d, %d", len(listenGroup.list), len(localForwardList))
 
-	info := startRelaySession(connInfo, param.keepAliveInterval, len(listenGroup.list) > 0, reconnect)
+	info := startRelaySession(connInfo, param.KeepAliveInterval, len(listenGroup.list) > 0, reconnect)
 
 	for _, listenInfo := range listenGroup.list {
 		go ListenNewConnectSub(listenInfo, info)
@@ -1800,7 +1800,7 @@ func ListenNewConnect(
 	listenGroup *ListenGroup, connInfo *ConnInfo, param *TunnelParam, loop bool,
 	reconnect func(sessionInfo *SessionInfo) *ConnInfo) {
 
-	info := startRelaySession(connInfo, param.keepAliveInterval, true, reconnect)
+	info := startRelaySession(connInfo, param.KeepAliveInterval, true, reconnect)
 
 	for _, listenInfo := range listenGroup.list {
 		go ListenNewConnectSub(listenInfo, info)
@@ -1823,9 +1823,9 @@ func NewConnect(
 	header *ConnHeader, info *pipeInfo) {
 	log.Print("header ", header)
 
-	dstAddr := header.HostInfo.toStr()
+	dstAddr := header.HostInfo.String()
 	dst, err := dialer(dstAddr)
-	log.Print("NewConnect -- %s", dstAddr)
+	log.Printf("NewConnect -- %s", dstAddr)
 
 	sessionInfo := info.connInfo.SessionInfo
 
@@ -1860,7 +1860,7 @@ func NewConnect(
 func prepareClose(info *pipeInfo) {
 	sessionInfo := info.connInfo.SessionInfo
 
-	log.Printf("prepareClose -- %s", sessionInfo.isTunnelServer)
+	log.Printf("prepareClose -- %t", sessionInfo.isTunnelServer)
 
 	if sessionInfo.isTunnelServer {
 		for len(sessionInfo.ctrlInfo.waitHeaderCount) > 0 {

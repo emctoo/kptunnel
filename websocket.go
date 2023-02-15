@@ -1,5 +1,5 @@
 // -*- coding: utf-8 -*-
-package main
+package kptunnel
 
 import (
 	"io"
@@ -111,7 +111,7 @@ func ConnectWebSocket(websocketUrl, proxyHost, userAgent string, param *TunnelPa
 	// proxyHost := "http://localhost:10080"
 	// userAgent := "test"
 
-	if param.ctrl == CTRL_STOP {
+	if param.Ctrl == CTRL_STOP {
 		workUrl, _ := url.Parse(websocketUrl)
 		if workUrl.RawQuery != "" {
 			websocketUrl += "&"
@@ -126,7 +126,7 @@ func ConnectWebSocket(websocketUrl, proxyHost, userAgent string, param *TunnelPa
 		log.Print("NewConfig error", err)
 		return nil, ReconnectInfo{nil, true, err}
 	}
-	for key, list := range param.wsReqHeader {
+	for key, list := range param.WsReqHeader {
 		for _, val := range list {
 			conf.Header.Add(key, val)
 		}
@@ -166,7 +166,7 @@ func ConnectWebSocket(websocketUrl, proxyHost, userAgent string, param *TunnelPa
 	// websocket の送信データを binary で扱う設定
 	websock.PayloadType = websocket.BinaryFrame
 
-	connInfo := CreateConnInfo(websock, param.encPass, param.encCount, sessionInfo, false)
+	connInfo := CreateConnInfo(websock, param.EncPass, param.EncCount, sessionInfo, false)
 	overrideForwardList := forwardList
 	cont := true
 	overrideForwardList, cont, err = ProcessClientAuth(connInfo, param, forwardList)

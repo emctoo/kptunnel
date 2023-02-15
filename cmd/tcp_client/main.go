@@ -5,19 +5,16 @@
 package main
 
 import (
-	"bufio"
 	"flag"
 	"fmt"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
-	"os/signal"
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
-	_ "net/http/pprof"
-
+	"github.com/emctoo/kptunnel"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -48,8 +45,8 @@ func main() {
 	multi := zerolog.MultiLevelWriter(os.Stdout, runLogFile)
 	log.Logger = zerolog.New(multi).With().Caller().Timestamp().Logger()
 
-	if BUFSIZE >= 65536 {
-		fmt.Printf("BUFSIZE is illegal. -- ", 65536)
+	if kptunnel.BUFSIZE >= 65536 {
+		fmt.Printf("BUFSIZE is illegal. -- %d", 65536)
 	}
 
 	var cmd = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
@@ -83,14 +80,7 @@ func main() {
 	}
 	if len(cmd.Args()) > 0 {
 		switch mode := cmd.Args()[0]; mode {
-		case "server":
-			ParseOptServer(mode, cmd.Args()[1:])
-		case "r-server":
-			ParseOptServer(mode, cmd.Args()[1:])
-		case "wsserver":
-			ParseOptServer(mode, cmd.Args()[1:])
-		case "r-wsserver":
-			ParseOptServer(mode, cmd.Args()[1:])
+
 		case "client":
 			ParseOptClient(mode, cmd.Args()[1:])
 		case "r-client":
@@ -99,14 +89,6 @@ func main() {
 			ParseOptClient(mode, cmd.Args()[1:])
 		case "r-wsclient":
 			ParseOptClient(mode, cmd.Args()[1:])
-		case "echo":
-			ParseOptEcho(mode, cmd.Args()[1:])
-		case "heavy":
-			ParseOptHeavy(mode, cmd.Args()[1:])
-		case "bot":
-			ParseOptBot(mode, cmd.Args()[1:])
-		case "test":
-			test()
 		}
 		os.Exit(0)
 	}
@@ -115,7 +97,7 @@ func main() {
 }
 
 func ParseOpt(
-	cmd *flag.FlagSet, mode string, args []string) (*TunnelParam, []ForwardInfo, func()) {
+	cmd *flag.FlagSet, mode string, args []string) (*kptunnel.TunnelParam, []kptunnel.ForwardInfo, func()) {
 
 	needForward := false
 	if mode == "r-server" || mode == "r-wsserver" ||
@@ -182,24 +164,24 @@ func ParseOpt(
 		usage()
 	}
 
-	serverInfo := hostname2HostInfo(nonFlagArgs[0])
+	serverInfo := kptunnel.Hostname2HostInfo(nonFlagArgs[0])
 	if serverInfo == nil {
 		fmt.Print("set -server option!\n")
 		usage()
 	}
 
-	var maskIP *MaskIP = nil
+	var maskIP *kptunnel.MaskIP = nil
 	if *ipPattern != "" {
 		var err error
-		maskIP, err = ippattern2MaskIP(*ipPattern)
+		maskIP, err = kptunnel.Ippattern2MaskIP(*ipPattern)
 		if err != nil {
 			fmt.Println(err)
 			usage()
 		}
 	}
 
-	verboseFlag = *verbose
-	debugFlag = *debug
+	kptunnel.VerboseFlag = *verbose
+	kptunnel.DebugFlag = *debug
 
 	if *pass == "" {
 		fmt.Print("warning: password is default. set -pass option.\n")
@@ -214,16 +196,15 @@ func ParseOpt(
 		*interval = 2
 	}
 
-	param := TunnelParam{
-		pass, mode, maskIP, encPass, *encCount, *interval * 1000,
-		getKey(magic), 0, *serverInfo, http.Header{}}
+	param := kptunnel.TunnelParam{Pass: pass, Mode: mode, MaskedIP: maskIP, EncPass: encPass, EncCount: *encCount, KeepAliveInterval: *interval * 1000,
+		Magic: kptunnel.GetKey(magic), ServerInfo: *serverInfo, WsReqHeader: http.Header{}}
 	if *ctrl != "" {
 		*omitForward = true
 		if *ctrl == "bench" {
-			param.ctrl = CTRL_BENCH
+			param.Ctrl = kptunnel.CTRL_BENCH
 		}
 		if *ctrl == "stop" {
-			param.ctrl = CTRL_STOP
+			param.Ctrl = kptunnel.CTRL_STOP
 		}
 	}
 
@@ -235,12 +216,12 @@ func ParseOpt(
 
 	if *console != "" {
 		go func() {
-			consoleHost := hostname2HostInfo(*console)
+			consoleHost := kptunnel.Hostname2HostInfo(*console)
 			if consoleHost == nil {
 				fmt.Printf("illegal host format. -- %s\n", *console)
 				usage()
 			}
-			StartConsole(*consoleHost)
+			kptunnel.StartConsole(*consoleHost)
 		}()
 	}
 
@@ -250,7 +231,7 @@ func ParseOpt(
 		isReverseTunnel = true
 	}
 
-	forwardList := []ForwardInfo{}
+	forwardList := []kptunnel.ForwardInfo{}
 	for _, arg := range nonFlagArgs[1:] {
 		isReverseForward := isReverseTunnel
 		tokenList := strings.Split(arg, ",")
@@ -270,48 +251,28 @@ func ParseOpt(
 			fmt.Printf("illegal forward. need ',' -- %s", arg)
 			usage()
 		}
-		remoteInfo := hostname2HostInfo(tokenList[1])
+		remoteInfo := kptunnel.Hostname2HostInfo(tokenList[1])
 		if remoteInfo == nil {
 			fmt.Printf("illegal forward. -- %s", arg)
 			usage()
 		}
-		srcInfo := hostname2HostInfo(tokenList[0])
+		srcInfo := kptunnel.Hostname2HostInfo(tokenList[0])
 		if srcInfo == nil {
 			fmt.Printf("illegal forward. -- %s", arg)
 			usage()
 		}
 		forwardList = append(
 			forwardList,
-			ForwardInfo{
-				IsReverseTunnel: isReverseForward, Src: *srcInfo, Dst: *remoteInfo})
+			kptunnel.ForwardInfo{IsReverseTunnel: isReverseForward, Src: *srcInfo, Dst: *remoteInfo})
 	}
 	if !*omitForward && len(forwardList) == 0 {
-		if mode == "r-server" || mode == "r-wsserver" ||
-			mode == "client" || mode == "wsclient" {
+		if mode == "r-server" || mode == "r-wsserver" || mode == "client" || mode == "wsclient" {
 			fmt.Print("set forward!")
 			usage()
 		}
 	}
 
 	return &param, forwardList, usage
-}
-
-func ParseOptServer(mode string, args []string) {
-	var cmd = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
-	param, forwardList, _ := ParseOpt(cmd, mode, args)
-
-	//log.SetPrefix(fmt.Sprintf("%d: ", param.serverInfo.Port))
-
-	switch mode {
-	case "server":
-		StartServer(param, forwardList)
-	case "r-server":
-		StartReverseServer(param, forwardList)
-	case "wsserver":
-		StartWebsocketServer(param, forwardList)
-	case "r-wsserver":
-		StartReverseWebSocketServer(param, forwardList)
-	}
 }
 
 func ParseOptClient(mode string, args []string) {
@@ -327,7 +288,7 @@ func ParseOptClient(mode string, args []string) {
 	if *header != "" {
 		token := regexp.MustCompile(":").Split(*header, 2)
 		if len(token) == 2 {
-			param.wsReqHeader.Add(token[0], token[1])
+			param.WsReqHeader.Add(token[0], token[1])
 		} else {
 			usage()
 		}
@@ -345,63 +306,16 @@ func ParseOptClient(mode string, args []string) {
 		wsQuery = "session=" + *session
 	}
 
-	websocketServerInfo := HostInfo{
-		schema, param.serverInfo.Name, param.serverInfo.Port, *wsPath, wsQuery}
+	websocketServerInfo := kptunnel.HostInfo{schema, param.ServerInfo.Name, param.ServerInfo.Port, *wsPath, wsQuery}
 
 	switch mode {
 	case "client":
-		StartClient(param, forwardList)
+		kptunnel.StartClient(param, forwardList)
 	case "r-client":
-		StartReverseClient(param)
+		kptunnel.StartReverseClient(param)
 	case "wsclient":
-		StartWebSocketClient(
-			*userAgent, param, websocketServerInfo, *proxyHost, forwardList)
+		kptunnel.StartWebSocketClient(*userAgent, param, websocketServerInfo, *proxyHost, forwardList)
 	case "r-wsclient":
-		StartReverseWebSocketClient(*userAgent, param, websocketServerInfo, *proxyHost)
-	}
-}
-
-func ParseOptEcho(mode string, args []string) {
-	var cmd = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
-	param, _, _ := ParseOpt(cmd, mode, args)
-
-	StartEchoServer(param.serverInfo)
-}
-
-func ParseOptHeavy(mode string, args []string) {
-	var cmd = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
-	param, _, _ := ParseOpt(cmd, mode, args)
-
-	StartHeavyClient(param.serverInfo)
-}
-
-func ParseOptBot(mode string, args []string) {
-	var cmd = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
-	param, _, _ := ParseOpt(cmd, mode, args)
-
-	StartBotServer(param.serverInfo)
-}
-
-func setsignal() {
-	sigchan := make(chan os.Signal)
-	signal.Notify(sigchan, os.Interrupt)
-	fmt.Print("wait sig")
-	<-sigchan
-	fmt.Print("detect sig")
-	signal.Stop(sigchan)
-
-	for {
-		time.Sleep(time.Second)
-		fmt.Print("hoge")
-	}
-}
-
-func test() {
-	scanner := bufio.NewScanner(os.Stdin)
-	for scanner.Scan() {
-		fmt.Println(scanner.Text()) // Println will add back the final '\n'
-	}
-	if err := scanner.Err(); err != nil {
-		fmt.Fprintln(os.Stderr, "reading standard input:", err)
+		kptunnel.StartReverseWebSocketClient(*userAgent, param, websocketServerInfo, *proxyHost)
 	}
 }

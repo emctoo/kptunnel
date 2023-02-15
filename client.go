@@ -3,7 +3,7 @@
 
 // -*- coding: utf-8 -*-
 
-package main
+package kptunnel
 
 import (
 	"fmt"
@@ -14,9 +14,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func connectTunnel(
-	serverInfo HostInfo,
-	param *TunnelParam, forwardList []ForwardInfo) ([]ForwardInfo, ReconnectInfo) {
+func connectTunnel(serverInfo HostInfo, param *TunnelParam, forwardList []ForwardInfo) ([]ForwardInfo, ReconnectInfo) {
 	log.Printf("start client --- %d", serverInfo.Port)
 	tunnel, err := net.Dial("tcp", fmt.Sprintf("%s:%d", serverInfo.Name, serverInfo.Port))
 	if err != nil {
@@ -24,7 +22,7 @@ func connectTunnel(
 	}
 	log.Print("connected to server")
 
-	connInfo := CreateConnInfo(tunnel, param.encPass, param.encCount, nil, false)
+	connInfo := CreateConnInfo(tunnel, param.EncPass, param.EncCount, nil, false)
 	overrideForwardList := forwardList
 	cont := true
 	overrideForwardList, cont, err = ProcessClientAuth(connInfo, param, forwardList)
@@ -38,11 +36,9 @@ func connectTunnel(
 }
 
 func StartClient(param *TunnelParam, forwardList []ForwardInfo) {
-
 	process := func() bool {
 		sessionParam := *param
-		forwardList, reconnectInfo := connectTunnel(
-			param.serverInfo, &sessionParam, forwardList)
+		forwardList, reconnectInfo := connectTunnel(param.ServerInfo, &sessionParam, forwardList)
 		if reconnectInfo.Err != nil {
 			return false
 		}
@@ -51,14 +47,11 @@ func StartClient(param *TunnelParam, forwardList []ForwardInfo) {
 		listenGroup, localForwardList := NewListen(true, forwardList)
 		defer listenGroup.Close()
 
-		reconnect := CreateToReconnectFunc(
-			func(sessionInfo *SessionInfo) ReconnectInfo {
-				_, reconnectInfo :=
-					connectTunnel(param.serverInfo, &sessionParam, forwardList)
-				return reconnectInfo
-			})
+		reconnect := CreateToReconnectFunc(func(sessionInfo *SessionInfo) ReconnectInfo {
+			_, reconnectInfo := connectTunnel(param.ServerInfo, &sessionParam, forwardList)
+			return reconnectInfo
+		})
 		ListenAndNewConnect(true, listenGroup, localForwardList, reconnectInfo.Conn, &sessionParam, reconnect)
-
 		return true
 	}
 
@@ -70,10 +63,9 @@ func StartClient(param *TunnelParam, forwardList []ForwardInfo) {
 }
 
 func StartReverseClient(param *TunnelParam) {
-
 	process := func() bool {
 		sessionParam := *param
-		forwardList, reconnectInfo := connectTunnel(param.serverInfo, &sessionParam, nil)
+		forwardList, reconnectInfo := connectTunnel(param.ServerInfo, &sessionParam, nil)
 		if reconnectInfo.Err != nil {
 			return false
 		}
@@ -82,11 +74,10 @@ func StartReverseClient(param *TunnelParam) {
 		listenGroup, localForwardList := NewListen(true, forwardList)
 		defer listenGroup.Close()
 
-		reconnect := CreateToReconnectFunc(
-			func(sessionInfo *SessionInfo) ReconnectInfo {
-				_, reconnectInfo := connectTunnel(param.serverInfo, &sessionParam, nil)
-				return reconnectInfo
-			})
+		reconnect := CreateToReconnectFunc(func(sessionInfo *SessionInfo) ReconnectInfo {
+			_, reconnectInfo := connectTunnel(param.ServerInfo, &sessionParam, nil)
+			return reconnectInfo
+		})
 		ListenAndNewConnect(true, listenGroup, localForwardList, reconnectInfo.Conn, &sessionParam, reconnect)
 		return true
 	}
@@ -98,9 +89,58 @@ func StartReverseClient(param *TunnelParam) {
 	}
 }
 
+type WebsocketClient struct {
+	UserAgent     string
+	TunnelConfig  *TunnelParam
+	ServerInfo    HostInfo
+	ProxyHost     string
+	Forwards      []ForwardInfo
+	ReconnectInfo ReconnectInfo
+	ListenerGroup *ListenGroup
+}
+
+func CreateWebsocketClient(serverInfo HostInfo, param *TunnelParam, forwardList []ForwardInfo, userAgent string, proxyHost string) (*WebsocketClient, error) {
+	forwardList, reconnectInfo := ConnectWebSocket(serverInfo.String(), proxyHost, userAgent, param, nil, forwardList)
+	if reconnectInfo.Err != nil {
+		return nil, reconnectInfo.Err
+	}
+	return &WebsocketClient{UserAgent: userAgent, TunnelConfig: param, ServerInfo: serverInfo, ProxyHost: proxyHost, Forwards: forwardList, ReconnectInfo: reconnectInfo}, nil
+}
+
+func (client *WebsocketClient) Start() {
+	defer func() {
+		_ = client.ReconnectInfo.Conn.Conn.Close()
+	}()
+
+	listenGroup, localForwardList := NewListen(true, client.Forwards)
+	defer listenGroup.Close()
+
+	client.ListenerGroup = listenGroup
+
+	reconnectUrl := client.ServerInfo.String()
+	if client.ServerInfo.Query != "" {
+		reconnectUrl += "&"
+	}
+	reconnectUrl += "mode=Reconnect"
+
+	reconnect := CreateToReconnectFunc(func(sessionInfo *SessionInfo) ReconnectInfo {
+		_, reconnectInfo := ConnectWebSocket(reconnectUrl, client.ProxyHost, client.UserAgent, client.TunnelConfig, sessionInfo, client.Forwards)
+		return reconnectInfo
+	})
+	ListenAndNewConnect(true, listenGroup, localForwardList, client.ReconnectInfo.Conn, client.TunnelConfig, reconnect)
+}
+
+func (client *WebsocketClient) Stop() {
+	log.Printf("stop websocket client side ...")
+	client.ListenerGroup.Close()
+	_ = client.ReconnectInfo.Conn.Conn.Close()
+	log.Printf("websocket client side exits.")
+}
+
 func StartWebSocketClient(userAgent string, param *TunnelParam, serverInfo HostInfo, proxyHost string, forwardList []ForwardInfo) {
+	log.Printf("serverInfo: %#v", serverInfo)
 	sessionParam := *param
-	forwardList, reconnectInfo := ConnectWebSocket(serverInfo.toStr(), proxyHost, userAgent, &sessionParam, nil, forwardList)
+	forwardList, reconnectInfo := ConnectWebSocket(serverInfo.String(), proxyHost, userAgent, &sessionParam, nil, forwardList)
 	if reconnectInfo.Err != nil {
 		return
 	}
@@ -111,7 +151,7 @@ func StartWebSocketClient(userAgent string, param *TunnelParam, serverInfo HostI
 	listenGroup, localForwardList := NewListen(true, forwardList)
 	defer listenGroup.Close()
 
-	reconnectUrl := serverInfo.toStr()
+	reconnectUrl := serverInfo.String()
 	if serverInfo.Query != "" {
 		reconnectUrl += "&"
 	}
@@ -127,7 +167,7 @@ func StartWebSocketClient(userAgent string, param *TunnelParam, serverInfo HostI
 func StartReverseWebSocketClient(userAgent string, param *TunnelParam, serverInfo HostInfo, proxyHost string) {
 	sessionParam := *param
 
-	reconnectUrl := serverInfo.toStr()
+	reconnectUrl := serverInfo.String()
 	if serverInfo.Query != "" {
 		reconnectUrl += "&"
 	}
@@ -139,7 +179,7 @@ func StartReverseWebSocketClient(userAgent string, param *TunnelParam, serverInf
 	})
 
 	process := func() {
-		forwardList, reconnectInfo := ConnectWebSocket(serverInfo.toStr(), proxyHost, userAgent, &sessionParam, nil, []ForwardInfo{})
+		forwardList, reconnectInfo := ConnectWebSocket(serverInfo.String(), proxyHost, userAgent, &sessionParam, nil, []ForwardInfo{})
 		if reconnectInfo.Err != nil {
 			return
 		}

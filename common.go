@@ -1,5 +1,5 @@
 // -*- coding: utf-8 -*-
-package main
+package kptunnel
 
 import (
 	"bytes"
@@ -44,7 +44,7 @@ type HostInfo struct {
 }
 
 // 接続先の文字列表現
-func (info *HostInfo) toStr() string {
+func (info *HostInfo) String() string {
 	work := fmt.Sprintf("%s%s:%d%s", info.Scheme, info.Name, info.Port, info.Path)
 	if info.Query != "" {
 		work = fmt.Sprintf("%s?%s", work, info.Query)
@@ -52,7 +52,7 @@ func (info *HostInfo) toStr() string {
 	return work
 }
 
-func hostname2HostInfo(name string) *HostInfo {
+func Hostname2HostInfo(name string) *HostInfo {
 	if strings.Index(name, "://") == -1 {
 		name = fmt.Sprintf("http://%s", name)
 	}
@@ -76,7 +76,7 @@ func hostname2HostInfo(name string) *HostInfo {
 }
 
 // パスワードからキーを生成する
-func getKey(pass []byte) []byte {
+func GetKey(pass []byte) []byte {
 	sum := sha256.Sum256(pass)
 	return sum[:]
 }
@@ -110,7 +110,7 @@ func CreateCryptCtrl(pass *string, count int) *CryptCtrl {
 	}
 
 	bufSize := BUFSIZE
-	key := getKey([]byte(*pass))
+	key := GetKey([]byte(*pass))
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		panic(err)
@@ -505,11 +505,11 @@ func ProcessServerAuth(
 
 	// 共通文字列を暗号化して送信することで、
 	// 接続先の暗号パスワードが一致しているかチェック出来るようにデータ送信
-	WriteItem(stream, CITIID_CTRL, []byte(param.magic), connInfo.CryptCtrlObj, nil)
+	WriteItem(stream, CITIID_CTRL, []byte(param.Magic), connInfo.CryptCtrlObj, nil)
 
 	// challenge 文字列生成
 	nano := time.Now().UnixNano()
-	sum := sha256.Sum256([]byte(fmt.Sprint("%v", nano)))
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%v", nano)))
 	str := base64.StdEncoding.EncodeToString(sum[:])
 	challenge := AuthChallenge{"1.00", str, param.Mode}
 
@@ -532,7 +532,7 @@ func ProcessServerAuth(
 		return false, nil, err
 	}
 	if resp.Response != generateChallengeResponse(
-		challenge.Challenge, param.pass, resp.Hint) {
+		challenge.Challenge, param.Pass, resp.Hint) {
 		// challenge-response が不一致なので、認証失敗
 		bytes, _ := json.Marshal(AuthResult{"ng", 0, "", 0, 0, nil})
 		if err := WriteItem(
@@ -555,7 +555,7 @@ func ProcessServerAuth(
 		newSession = true
 	} else {
 		if sessionInfo, has := GetSessionInfo(sessionToken); !has {
-			mess := fmt.Sprintf("not found session -- %d", sessionToken)
+			mess := fmt.Sprintf("not found session -- %s", sessionToken)
 			bytes, _ := json.Marshal(AuthResult{"ng: " + mess, 0, "", 0, 0, nil})
 			if err := WriteItem(
 				stream, CITIID_CTRL, bytes, connInfo.CryptCtrlObj, nil); err != nil {
@@ -709,7 +709,7 @@ func ProcessClientAuth(
 	if err != nil {
 		return nil, true, err
 	}
-	if !bytes.Equal(magicItem.buf, []byte(param.magic)) {
+	if !bytes.Equal(magicItem.buf, []byte(param.Magic)) {
 		return nil, true, fmt.Errorf("unmatch MAGIC %x", magicItem.buf)
 	}
 	log.Print("read challenge")
@@ -747,14 +747,14 @@ func ProcessClientAuth(
 
 	// response を生成
 	nano := time.Now().UnixNano()
-	sum := sha256.Sum256([]byte(fmt.Sprint("%v", nano)))
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%v", nano)))
 	hint := base64.StdEncoding.EncodeToString(sum[:])
-	resp := generateChallengeResponse(challenge.Challenge, param.pass, hint)
+	resp := generateChallengeResponse(challenge.Challenge, param.Pass, hint)
 	bytes, _ := json.Marshal(
 		AuthResponse{
 			resp, hint, connInfo.SessionInfo.SessionToken,
 			connInfo.SessionInfo.WriteNo,
-			connInfo.SessionInfo.ReadNo, param.ctrl, forwardList})
+			connInfo.SessionInfo.ReadNo, param.Ctrl, forwardList})
 	if err := WriteItem(
 		stream, CITIID_CTRL, bytes, connInfo.CryptCtrlObj, nil); err != nil {
 		return nil, true, err
@@ -784,11 +784,11 @@ func ProcessClientAuth(
 				// 違う場合は警告を出力する。
 				orgMap := map[string]bool{}
 				for _, forwardInfo := range forwardList {
-					orgMap[forwardInfo.toStr()] = true
+					orgMap[forwardInfo.String()] = true
 				}
 				newMap := map[string]bool{}
 				for _, forwardInfo := range result.ForwardList {
-					newMap[forwardInfo.toStr()] = true
+					newMap[forwardInfo.String()] = true
 				}
 				diff := false
 				if len(orgMap) != len(newMap) {
@@ -810,7 +810,7 @@ func ProcessClientAuth(
 			}
 		}
 
-		if param.ctrl == CTRL_BENCH {
+		if param.Ctrl == CTRL_BENCH {
 			// ベンチマーク
 			benchBuf := make([]byte, 100)
 			prev := time.Now()
@@ -828,7 +828,7 @@ func ProcessClientAuth(
 
 			return nil, false, fmt.Errorf("benchmarck -- %s", duration)
 		}
-		if param.ctrl == CTRL_STOP {
+		if param.Ctrl == CTRL_STOP {
 			os.Exit(0)
 		}
 

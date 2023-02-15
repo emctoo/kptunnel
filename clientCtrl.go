@@ -1,5 +1,5 @@
 // -*- coding: utf-8 -*-
-package main
+package kptunnel
 
 import (
 	"fmt"
@@ -35,7 +35,7 @@ func remoteAddr2ip(remoteAddr string) net.IP {
 	return net.ParseIP(remoteAddr)
 }
 
-func ippattern2MaskIP(ipPattern string) (*MaskIP, error) {
+func Ippattern2MaskIP(ipPattern string) (*MaskIP, error) {
 	dIndex := strings.Index(ipPattern, "/")
 
 	var maskLen = 0
@@ -72,10 +72,10 @@ func AcceptClient(remoteAddr string, param *TunnelParam) error {
 	remoteIP := remoteAddr2ip(remoteAddr)
 	ipTxt := remoteIP.String()
 
-	if param.maskedIP != nil {
+	if param.MaskedIP != nil {
 		// 接続元のアドレスをチェックする
-		if !param.maskedIP.inRange(remoteIP) {
-			return fmt.Errorf("unmatch ip -- %s", ipTxt)
+		if !param.MaskedIP.inRange(remoteIP) {
+			return fmt.Errorf("ip [%s] mismatches, MaskedIP: %#v, remoteIP: %s", ipTxt, param.MaskedIP, remoteIP)
 		}
 	}
 
