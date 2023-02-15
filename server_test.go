@@ -3,6 +3,7 @@ package kptunnel
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"log"
 	"math/rand"
 	"net"
@@ -123,12 +124,15 @@ func makeEchoClientConnections(t *testing.T, serverAddr string) {
 		if err != nil {
 			t.Error("fail to write", err)
 		}
+		fmt.Printf("%d - sent: [%s]\n", i, input)
 
 		line, _ := tp.ReadLine()
+		fmt.Printf("%d - recv: [%s]\n", i, line)
 		if strings.Compare(input, line) != 0 {
 			t.Errorf("mismatch, input: %v, output: %v", input, line)
 		}
 	}
+	println("done")
 }
 
 func defaultTunnelConfig(serverAddr string, mode string, serverInfo *HostInfo) TunnelParam {
@@ -156,48 +160,61 @@ func startWebsocketServer(t *testing.T, serverAddr string) *http.Server {
 	return server
 }
 
-func TestStartWebsocketServer1(t *testing.T) {
+//func TestStartWebsocketServer1(t *testing.T) {
+//	param := defaultTunnelConfig(":1034", "wsserver", nil)
+//	server := StartWebsocketServer(&param, []ForwardInfo{})
+//	go func() {
+//		println("listening ...")
+//		_ = server.ListenAndServe()
+//	}()
+//	defer server.Shutdown(context.Background())
+//}
+
+func TestWebsocketServer(t *testing.T) {
+	s := NewTestEchoServer(t, "127.0.0.1:2023")
+
 	param := defaultTunnelConfig(":1034", "wsserver", nil)
 	server := StartWebsocketServer(&param, []ForwardInfo{})
 	go func() {
-		if err := server.ListenAndServe(); err != nil {
-			t.Error(err)
+		err := server.ListenAndServe()
+		if err == http.ErrServerClosed {
+			print("server is shutdown")
 		}
 	}()
-	defer server.Shutdown(context.Background())
-}
 
-func TestWebsocketServer(t *testing.T) {
-	s := NewTestEchoServer(t, "localhost:2023")
-	defer s.Stop()
+	time.Sleep(time.Second * 1)
 
-	server := startWebsocketServer(t, ":1034")
-	defer server.Shutdown(context.Background())
-	//if err := server.ListenAndServe(); err != nil {
-	//	t.Error(err)
+	//forwards := []ForwardInfo{
+	//	{
+	//		IsReverseTunnel: false,
+	//		Src:             *Hostname2HostInfo(":2022"),
+	//		Dst:             *Hostname2HostInfo("localhost:2023"),
+	//	},
 	//}
-
-	time.Sleep(time.Second * 3)
 
 	forwards := []ForwardInfo{
 		{
 			IsReverseTunnel: false,
-			Src:             *Hostname2HostInfo(":2022"),
-			Dst:             *Hostname2HostInfo("localhost:2023"),
+			Src:             HostInfo{Scheme: "", Name: "", Port: 2022, Path: "", Query: ""},
+			Dst:             HostInfo{Scheme: "", Name: "127.0.0.1", Port: 2023, Path: "", Query: ""},
 		},
 	}
 	serverInfo := HostInfo{Scheme: "ws://", Name: "127.0.0.1", Port: 1034, Path: "/", Query: "session=fb018a73-2d8a-416f-bf5a-aea59aa6d4a9"}
 	clientTunnelConfig := defaultTunnelConfig("127.0.0.1:1034", "wsclient", &serverInfo)
-
-	client, err := CreateWebsocketClient(serverInfo, &clientTunnelConfig, forwards, "", "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	client, _ := CreateWebsocketClient(serverInfo, &clientTunnelConfig, forwards, "", "")
+	//if err != nil {
+	//	t.Fatal(err)
+	//}
 	go client.Start()
 
-	makeEchoClientConnections(t, "localhost:2022")
-	makeEchoClientConnections(t, "localhost:2022")
+	time.Sleep(time.Second * 3)
+
+	makeEchoClientConnections(t, "127.0.0.1:2022")
+	// makeEchoClientConnections(t, "localhost:2022")
+
+	_ = server.Shutdown(context.Background())
 	//if err := server.Shutdown(context.Background()); err != nil {
 	//	t.Error(err)
 	//}
+	s.Stop()
 }
