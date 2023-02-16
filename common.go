@@ -489,12 +489,9 @@ func generateChallengeResponse(challenge string, pass *string, hint string) stri
 // @return bool 新しい session の場合 true
 // @return []ForwardInfo 接続する ForwardInfo リスト
 // @return error
-func ProcessServerAuth(
-	connInfo *ConnInfo, param *TunnelParam,
-	remoteAddr string, forwardList []ForwardInfo) (bool, []ForwardInfo, error) {
-
+func ProcessServerAuth(connInfo *ConnInfo, param *TunnelParam, remoteAddr string, forwardList []ForwardInfo) (bool, []ForwardInfo, error) {
 	stream := connInfo.Conn
-	log.Print("start auth")
+	log.Print("start server auth")
 
 	if err := CorrectLackOffsetWrite(stream); err != nil {
 		return false, nil, err
@@ -689,11 +686,8 @@ func CorrectLackOffsetRead(stream io.Reader) error {
 // @param param TunnelParam
 // @return bool エラー時に、処理を継続するかどうか。true の場合継続する。
 // @return error エラー
-func ProcessClientAuth(
-	connInfo *ConnInfo, param *TunnelParam,
-	forwardList []ForwardInfo) ([]ForwardInfo, bool, error) {
-
-	log.Print("start auth")
+func ProcessClientAuth(connInfo *ConnInfo, param *TunnelParam, forwardList []ForwardInfo) ([]ForwardInfo, bool, error) {
+	log.Print("start client auth")
 
 	stream := connInfo.Conn
 

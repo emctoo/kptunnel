@@ -162,6 +162,7 @@ func ConnectWebSocket(websocketUrl, proxyHost, userAgent string, param *TunnelPa
 			return nil, ReconnectInfo{nil, true, err}
 		}
 	}
+	log.Info().Msgf("websocket to %s connected", websocketUrl)
 
 	// websocket の送信データを binary で扱う設定
 	websock.PayloadType = websocket.BinaryFrame

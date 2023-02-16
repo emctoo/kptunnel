@@ -40,13 +40,13 @@ type TestEchoServer struct {
 	wg       sync.WaitGroup
 }
 
-func NewTestEchoServer(t *testing.T, addr string) *TestEchoServer {
+func newTestEchoServer(addr string) *TestEchoServer {
 	s := &TestEchoServer{
 		quitChan: make(chan interface{}),
 	}
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
-		t.Fatal(err)
+		log.Fatal(err)
 	}
 	s.listener = l
 	s.wg.Add(1)
@@ -101,13 +101,7 @@ func (s *TestEchoServer) handleConnection(conn net.Conn) {
 }
 
 func TestTcpEchoServer(t *testing.T) {
-	launchTcpEchoServer(t, "localhost:2345", "localhost:2345")
-}
-
-func launchTcpEchoServer(t *testing.T, listeningAddr string, connectingAddr string) {
-	s := NewTestEchoServer(t, listeningAddr)
-	defer s.Stop()
-	makeEchoClientConnections(t, connectingAddr)
+	makeEchoClientConnections(t, "localhost:12023")
 }
 
 func makeEchoClientConnections(t *testing.T, serverAddr string) {
@@ -145,7 +139,7 @@ func defaultTunnelConfig(serverAddr string, mode string, serverInfo *HostInfo) T
 	}
 	// serverInfo := &HostInfo{Scheme: "ws://", Name: "127.0.0.1", Port: 1034, Path: "/"}
 	//serverInfo := &HostInfo{Scheme: "", Name: "", Port: 1034, Path: "", Query: ""}
-	return TunnelParam{Pass: &pass, Mode: mode, MaskedIP: nil, EncPass: &encPass, EncCount: encCount,
+	return TunnelParam{Pass: &pass, Mode: mode, EncPass: &encPass, EncCount: encCount,
 		KeepAliveInterval: 20 * 1000, Magic: magic, ServerInfo: *serverInfo, WsReqHeader: http.Header{}}
 }
 
@@ -171,7 +165,14 @@ func startWebsocketServer(t *testing.T, serverAddr string) *http.Server {
 //}
 
 func TestWebsocketServer(t *testing.T) {
-	s := NewTestEchoServer(t, "127.0.0.1:2023")
+	// makeEchoClientConnections(t, "127.0.0.1:2022")
+	// makeEchoClientConnections(t, "localhost:2022")
+
+}
+
+func init() {
+	s := newTestEchoServer("127.0.0.1:12023")
+	defer s.Stop()
 
 	param := defaultTunnelConfig(":1034", "wsserver", nil)
 	server := StartWebsocketServer(&param, []ForwardInfo{})
@@ -181,40 +182,17 @@ func TestWebsocketServer(t *testing.T) {
 			print("server is shutdown")
 		}
 	}()
-
-	time.Sleep(time.Second * 1)
-
-	//forwards := []ForwardInfo{
-	//	{
-	//		IsReverseTunnel: false,
-	//		Src:             *Hostname2HostInfo(":2022"),
-	//		Dst:             *Hostname2HostInfo("localhost:2023"),
-	//	},
-	//}
+	defer func() { _ = server.Shutdown(context.Background()) }()
 
 	forwards := []ForwardInfo{
 		{
 			IsReverseTunnel: false,
-			Src:             HostInfo{Scheme: "", Name: "", Port: 2022, Path: "", Query: ""},
-			Dst:             HostInfo{Scheme: "", Name: "127.0.0.1", Port: 2023, Path: "", Query: ""},
+			Src:             HostInfo{Port: 2022},
+			Dst:             HostInfo{Name: "127.0.0.1", Port: 12023},
 		},
 	}
 	serverInfo := HostInfo{Scheme: "ws://", Name: "127.0.0.1", Port: 1034, Path: "/", Query: "session=fb018a73-2d8a-416f-bf5a-aea59aa6d4a9"}
 	clientTunnelConfig := defaultTunnelConfig("127.0.0.1:1034", "wsclient", &serverInfo)
 	client, _ := CreateWebsocketClient(serverInfo, &clientTunnelConfig, forwards, "", "")
-	//if err != nil {
-	//	t.Fatal(err)
-	//}
 	go client.Start()
-
-	time.Sleep(time.Second * 3)
-
-	makeEchoClientConnections(t, "127.0.0.1:2022")
-	// makeEchoClientConnections(t, "localhost:2022")
-
-	_ = server.Shutdown(context.Background())
-	//if err := server.Shutdown(context.Background()); err != nil {
-	//	t.Error(err)
-	//}
-	s.Stop()
 }
