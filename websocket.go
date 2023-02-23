@@ -107,7 +107,6 @@ func (info *proxyInfo) Dial(network, addr string) (net.Conn, error) {
 
 // ConnectWebSocket connects to the server
 func ConnectWebSocket(websocketUrl, proxyHost, userAgent string, param *TunnelParam, sessionInfo *SessionInfo, forwardList []ForwardInfo) ([]ForwardInfo, ReconnectInfo) {
-	log.Printf("got forwards: %v", forwardList)
 	if param.Ctrl == CTRL_STOP {
 		workUrl, _ := url.Parse(websocketUrl)
 		if workUrl.RawQuery != "" {

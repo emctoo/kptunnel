@@ -13,7 +13,6 @@ import (
 	"net"
 	"net/http"
 
-	//"regexp"
 	"bytes"
 	"sync"
 	"time"
@@ -1039,7 +1038,8 @@ type ConnInfoRev struct {
 	rev      int
 }
 
-func binaryToControl(sessionInfo *SessionInfo, buf []byte) {
+// parses control packet from binary
+func parseControlPacket(sessionInfo *SessionInfo, buf []byte) {
 	if len(buf) == 0 {
 		log.Print("ignore empty buffer 0")
 		return
@@ -1098,7 +1098,7 @@ func packetReader(pipeInfo *PipeInfo) {
 				log.Debug().Msgf("read from conn, size: %d", len(packet.buf))
 
 				if packet.citiId == CITIID_CTRL {
-					binaryToControl(sessionInfo, packet.buf)
+					parseControlPacket(sessionInfo, packet.buf)
 					readSize = 1 // set readSize to 1 so that the process doesn't end
 				} else {
 					if citi = sessionInfo.getCiti(packet.citiId); citi != nil {
@@ -1182,8 +1182,7 @@ func reconnectAndRewrite(
 // @param info pipe情報
 // @param packet 送信するデータ
 // @param connInfoRev コネクション情報
-func packetWriterSub(
-	info *PipeInfo, packet *PackInfo, connInfoRev *ConnInfoRev) bool {
+func packetWriterSub(info *PipeInfo, packet *PackInfo, connInfoRev *ConnInfoRev) bool {
 
 	sessionInfo := connInfoRev.connInfo.SessionInfo
 	for {
@@ -1439,7 +1438,7 @@ func relaySession(info *PipeInfo, citi *ConnInTunnelInfo, hostInfo HostInfo) {
 	log.Printf("close citi: sessionId %d, citiId %d, read %d, write %d", sessionInfo.SessionId, citi.citiId, citi.ReadSize, citi.WriteSize)
 	log.Printf("close citi: readNo %d, writeNo %d, sourceBytesChan %d", citi.ReadNo, citi.WriteNo, len(citi.sourceBytesChan))
 	log.Printf("close citi: session readNo %d, session writeNo %d", sessionInfo.ReadNo, sessionInfo.WriteNo)
-	log.Printf("waitTime: stream2Tunnel %s, tunnel2Stream %s, packetWriter %s, packetReader %s\n",
+	log.Printf("waitTime: stream2Tunnel %s, tunnel2Stream %s, packetWriter %s, packetReader %s",
 		citi.waitTimeInfo.stream2Tunnel, citi.waitTimeInfo.tunnel2Stream, sessionInfo.packetWriterWaitTime, citi.waitTimeInfo.packetReader)
 
 	// sessionInfo.packChan <- PackInfo { nil, PACKET_KIND_EOS, CITIID_CTRL } // pending

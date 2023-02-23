@@ -102,7 +102,7 @@ func (handler WrapWSHandler) ServeHTTP(w http.ResponseWriter, req *http.Request)
 	}
 	defer ReleaseClient(req.RemoteAddr)
 
-	log.Printf("accept -- %v", req)
+	log.Info().Msgf("serving on %s ...", req.URL)
 
 	wrap := func(ws *websocket.Conn) {
 		// WrapWSHandler のハンドラを実行する
@@ -115,7 +115,7 @@ func (handler WrapWSHandler) ServeHTTP(w http.ResponseWriter, req *http.Request)
 	// WebSocket サーバハンドル処理。
 	wshandler.ServeHTTP(w, req)
 
-	log.Printf("exit -- %v", req)
+	log.Printf("serving of %s ends", req.URL)
 }
 
 type WebSocketServer struct {

@@ -164,38 +164,38 @@ func startWebsocketServer(t *testing.T, serverAddr string) *http.Server {
 }
 
 func TestStartWebsocketServer(t *testing.T) {
-	echoServer := newTestEchoServer("127.0.0.1:12023")
-	defer echoServer.Stop()
+	//echoServer := newTestEchoServer("127.0.0.1:12023")
+	//defer echoServer.Stop()
 
 	// server
 	// run client: ./wsc wsclient 127.0.0.1:1034 :2022,127.0.0.1:12023 -pass 42 -encPass 42
-	param := defaultTunnelConfig(":1034", "wsserver", nil)
+	param := defaultTunnelConfig(":1035", "wsserver", nil)
 	server := StartWebsocketServer(&param, []ForwardInfo{})
 	go func() {
 		//println("listening ...")
 		_ = server.ListenAndServe()
 	}()
 	defer func() { _ = server.Shutdown(context.Background()) }()
-
-	time.Sleep(time.Second * 5) // TODO signal from server to notify readiness
+	// time.Sleep(time.Second * 5) // TODO signal from server to notify readiness
 
 	// clients
 	// run server: ./wsd wsserver :1034 -pass 42 -encPass 42
-	if false {
-		forwards := []ForwardInfo{
-			{
-				IsReverseTunnel: false,
-				Src:             HostInfo{Port: 2022},
-				Dst:             HostInfo{Name: "127.0.0.1", Port: 12023},
-			},
-		}
-		serverInfo := HostInfo{Scheme: "ws://", Name: "127.0.0.1", Port: 1034, Path: "/", Query: "session=fb018a73-2d8a-416f-bf5a-aea59aa6d4a9"}
-		clientTunnelConfig := defaultTunnelConfig("127.0.0.1:1034", "wsclient", &serverInfo)
-		client, _ := CreateWebsocketClient(serverInfo, &clientTunnelConfig, forwards, "", "")
-		go client.Start()
-	}
+	//if false {
+	//	forwards := []ForwardInfo{
+	//		{
+	//			IsReverseTunnel: false,
+	//			Src:             HostInfo{Port: 2022},
+	//			Dst:             HostInfo{Name: "127.0.0.1", Port: 12023},
+	//		},
+	//	}
+	//	serverInfo := HostInfo{Scheme: "ws://", Name: "127.0.0.1", Port: 1034, Path: "/", Query: "session=fb018a73-2d8a-416f-bf5a-aea59aa6d4a9"}
+	//	clientTunnelConfig := defaultTunnelConfig("127.0.0.1:1034", "wsclient", &serverInfo)
+	//	client, _ := CreateWebsocketClient(serverInfo, &clientTunnelConfig, forwards, "", "")
+	//	go client.Start()
+	//}
 
-	time.Sleep(time.Second * 10) // TODO signal from client to notify readiness
+	time.Sleep(time.Second * 5) // TODO signal from client to notify readiness
+
 	makeEchoClientConnections(t, "127.0.0.1:2022")
 }
 

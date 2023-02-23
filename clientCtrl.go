@@ -59,7 +59,7 @@ func Ippattern2MaskIP(ipPattern string) (*MaskIP, error) {
 	}
 	mask := net.CIDRMask(maskLen, maxBit)
 	work := ip.Mask(mask)
-	fmt.Printf("maskedIP %d %s %s\n",
+	fmt.Printf("maskedIP %d %s %s",
 		maxBit, work.String(), ipPattern)
 
 	return &MaskIP{work, mask}, nil
@@ -83,7 +83,7 @@ func AcceptClient(remoteAddr string, param *TunnelParam) error {
 	if has && val >= MAX_SESSION_PER_CLIENT {
 		return fmt.Errorf("session over -- %s", ipTxt)
 	}
-	log.Printf("client: '%s(%s)' -- %d", ipTxt, remoteAddr, val+1)
+	log.Debug().Msgf("accept client: %s", remoteAddr)
 	client2count[ipTxt] = val + 1
 
 	return nil

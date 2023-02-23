@@ -305,8 +305,7 @@ func ParseOptClient(mode string, args []string) {
 
 	websocketServerInfo := kptunnel.HostInfo{schema, param.ServerInfo.Name, param.ServerInfo.Port, *wsPath, wsQuery}
 
-	log.Printf("client forwards: (nil? %t, len: %d) %#v", forwardList == nil, len(forwardList), forwardList)
-	log.Printf("tunnel param: %#v", param)
+	log.Debug().Msgf("tunnel param: %#v", param.String())
 
 	switch mode {
 	case "wsclient":

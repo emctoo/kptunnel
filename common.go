@@ -58,18 +58,18 @@ func Hostname2HostInfo(name string) *HostInfo {
 	}
 	serverUrl, err := url.Parse(name)
 	if err != nil {
-		fmt.Printf("%s\n", err)
+		fmt.Printf("%s", err)
 		return nil
 	}
 	hostport := strings.Split(serverUrl.Host, ":")
 	if len(hostport) != 2 {
-		fmt.Printf("illegal pattern. set 'hoge.com:1234' -- %s\n", name)
+		fmt.Printf("illegal pattern. set 'hoge.com:1234' -- %s", name)
 		return nil
 	}
 	var port int
 	port, err2 := strconv.Atoi(hostport[1])
 	if err2 != nil {
-		fmt.Printf("%s\n", err2)
+		fmt.Printf("%s", err2)
 		return nil
 	}
 	return &HostInfo{"", hostport[0], port, serverUrl.Path, serverUrl.RawQuery}
@@ -650,9 +650,9 @@ func CorrectLackOffsetRead(stream io.Reader) error {
 	if _, err := io.ReadFull(stream, buf); err != nil {
 		return err
 	}
-	log.Printf("num: %x\n", buf)
+	log.Printf("num: %x", buf)
 	offset := int(buf[0])
-	log.Printf("offset: %d\n", offset)
+	log.Printf("offset: %d", offset)
 	if offset >= 10 {
 		return fmt.Errorf("illegal num -- %d", offset)
 	}
@@ -661,7 +661,7 @@ func CorrectLackOffsetRead(stream io.Reader) error {
 	if _, err := io.ReadFull(stream, buf[:10-offset]); err != nil {
 		return err
 	}
-	log.Printf("num2: %x\n", buf)
+	log.Printf("num2: %x", buf)
 	for index := 0; index < 10-offset; index++ {
 		if int(buf[index]) != offset+index {
 			return fmt.Errorf(
