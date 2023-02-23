@@ -8,6 +8,8 @@ package kptunnel
 import (
 	"fmt"
 	"net"
+	"time"
+
 	//"time"
 	//"io"
 
@@ -100,8 +102,10 @@ type WebsocketClient struct {
 }
 
 func CreateWebsocketClient(serverInfo HostInfo, param *TunnelParam, forwardList []ForwardInfo, userAgent string, proxyHost string) (*WebsocketClient, error) {
+	log.Printf("before connecting, forwards: %v", forwardList)
 	forwardList, reconnectInfo := ConnectWebSocket(serverInfo.String(), proxyHost, userAgent, param, nil, forwardList)
 	if reconnectInfo.Err != nil {
+		log.Err(reconnectInfo.Err).Msgf("initial connection failed")
 		return nil, reconnectInfo.Err
 	}
 	return &WebsocketClient{UserAgent: userAgent, TunnelConfig: param, ServerInfo: serverInfo, ProxyHost: proxyHost, Forwards: forwardList, ReconnectInfo: reconnectInfo}, nil
@@ -124,6 +128,7 @@ func (client *WebsocketClient) Start() {
 	reconnectUrl += "mode=Reconnect"
 
 	reconnect := CreateToReconnectFunc(func(sessionInfo *SessionInfo) ReconnectInfo {
+		log.Info().Msgf("reconnect to %s ...", reconnectUrl)
 		_, reconnectInfo := ConnectWebSocket(reconnectUrl, client.ProxyHost, client.UserAgent, client.TunnelConfig, sessionInfo, client.Forwards)
 		return reconnectInfo
 	})
@@ -137,13 +142,19 @@ func (client *WebsocketClient) Stop() {
 	log.Printf("websocket client side exits.")
 }
 
-func StartWebSocketClient(userAgent string, param *TunnelParam, serverInfo HostInfo, proxyHost string, forwardList []ForwardInfo) {
+func StartWebSocketClient(userAgent string, param *TunnelParam, serverInfo HostInfo, proxyHost string, inputForwards []ForwardInfo) {
 	log.Printf("serverInfo: %#v", serverInfo)
 	sessionParam := *param
-	forwardList, reconnectInfo := ConnectWebSocket(serverInfo.String(), proxyHost, userAgent, &sessionParam, nil, forwardList)
-	if reconnectInfo.Err != nil {
-		return
+	var reconnectInfo ReconnectInfo
+	var forwardList []ForwardInfo
+	for {
+		forwardList, reconnectInfo = ConnectWebSocket(serverInfo.String(), proxyHost, userAgent, &sessionParam, nil, inputForwards)
+		if reconnectInfo.Err == nil {
+			break
+		}
+		time.Sleep(time.Second * 1)
 	}
+
 	defer func() {
 		_ = reconnectInfo.Conn.Conn.Close()
 	}()

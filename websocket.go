@@ -105,12 +105,9 @@ func (info *proxyInfo) Dial(network, addr string) (net.Conn, error) {
 	return conn, nil
 }
 
-// websocketUrl で示すサーバに websocket で接続する
+// ConnectWebSocket connects to the server
 func ConnectWebSocket(websocketUrl, proxyHost, userAgent string, param *TunnelParam, sessionInfo *SessionInfo, forwardList []ForwardInfo) ([]ForwardInfo, ReconnectInfo) {
-	// websocketUrl := "ws://localhost:12345/echo"
-	// proxyHost := "http://localhost:10080"
-	// userAgent := "test"
-
+	log.Printf("got forwards: %v", forwardList)
 	if param.Ctrl == CTRL_STOP {
 		workUrl, _ := url.Parse(websocketUrl)
 		if workUrl.RawQuery != "" {
@@ -118,9 +115,6 @@ func ConnectWebSocket(websocketUrl, proxyHost, userAgent string, param *TunnelPa
 		}
 		websocketUrl += "mode=Disconnect"
 	}
-
-	log.Printf("%s, %s, %s", websocketUrl, proxyHost, userAgent)
-
 	conf, err := websocket.NewConfig(websocketUrl, "http://localhost")
 	if err != nil {
 		log.Print("NewConfig error", err)
@@ -131,12 +125,9 @@ func ConnectWebSocket(websocketUrl, proxyHost, userAgent string, param *TunnelPa
 			conf.Header.Add(key, val)
 		}
 	}
-
 	if strings.Index(websocketUrl, "wss") == 0 {
-		// とりあえず tls の検証を skip する
-		conf.TlsConfig = &tls.Config{
-			InsecureSkipVerify: true,
-		}
+		// Skip tls verification for now
+		conf.TlsConfig = &tls.Config{InsecureSkipVerify: true}
 	}
 	var websock *websocket.Conn
 	if proxyHost != "" {
@@ -158,29 +149,30 @@ func ConnectWebSocket(websocketUrl, proxyHost, userAgent string, param *TunnelPa
 	} else {
 		websock, err = websocket.DialConfig(conf)
 		if err != nil {
-			log.Print("websocket error", err)
+			log.Err(err).Msgf("websocket fail to dial")
 			return nil, ReconnectInfo{nil, true, err}
 		}
 	}
-	log.Info().Msgf("websocket to %s connected", websocketUrl)
+	log.Info().Msgf("connected to %s", websocketUrl)
 
-	// websocket の送信データを binary で扱う設定
-	websock.PayloadType = websocket.BinaryFrame
+	websock.PayloadType = websocket.BinaryFrame // Settings for handling websocket transmission data as binary
 
 	connInfo := CreateConnInfo(websock, param.EncPass, param.EncCount, sessionInfo, false)
+
 	overrideForwardList := forwardList
 	cont := true
+	log.Printf("client is to auth, forwards: %v", forwardList)
 	overrideForwardList, cont, err = ProcessClientAuth(connInfo, param, forwardList)
 	if err != nil {
+		log.Err(err).Msg("client failed to auth")
 		connInfo.SessionInfo.SetState(Session_state_authmiss)
-		log.Print(err)
-		websock.Close()
+		_ = websock.Close()
 		return nil, ReconnectInfo{nil, cont, err}
 	}
 
+	log.Printf("local forwards %v, from remote forwards: %v", forwardList, overrideForwardList)
 	if overrideForwardList == nil || len(overrideForwardList) == 0 {
 		overrideForwardList = forwardList
 	}
-
 	return overrideForwardList, ReconnectInfo{connInfo, true, nil}
 }

@@ -186,17 +186,10 @@ func (ctrl *CryptCtrl) Decrypt(bytes []byte) []byte {
 	return ctrl.dec.Process(bytes, nil)
 }
 
-// 通常パッケット
-const PACKET_KIND_NORMAL = 0
-
-// 無通信を避けるためのダミーパケット
-const PACKET_KIND_DUMMY = 1
-
-// packetWriter() の処理終了を通知するためのパケット
-const PACKET_KIND_EOS = 2
-
-// Tunnel の通信を同期するためのパケット
-const PACKET_KIND_SYNC = 3
+const PACKET_KIND_NORMAL = 0 // normal packet
+const PACKET_KIND_DUMMY = 1  // dummy packet as heartbeat
+const PACKET_KIND_EOS = 2    // Packet for notifying the end of stream
+const PACKET_KIND_SYNC = 3   // Packet for communication synchronization
 const PACKET_KIND_NORMAL_DIRECT = 4
 
 var dummyKindBuf = []byte{PACKET_KIND_DUMMY}
@@ -687,7 +680,7 @@ func CorrectLackOffsetRead(stream io.Reader) error {
 // @return bool エラー時に、処理を継続するかどうか。true の場合継続する。
 // @return error エラー
 func ProcessClientAuth(connInfo *ConnInfo, param *TunnelParam, forwardList []ForwardInfo) ([]ForwardInfo, bool, error) {
-	log.Print("start client auth")
+	log.Printf("client starts auth ... (forwards: %v)", forwardList)
 
 	stream := connInfo.Conn
 
@@ -744,13 +737,8 @@ func ProcessClientAuth(connInfo *ConnInfo, param *TunnelParam, forwardList []For
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%v", nano)))
 	hint := base64.StdEncoding.EncodeToString(sum[:])
 	resp := generateChallengeResponse(challenge.Challenge, param.Pass, hint)
-	bytes, _ := json.Marshal(
-		AuthResponse{
-			resp, hint, connInfo.SessionInfo.SessionToken,
-			connInfo.SessionInfo.WriteNo,
-			connInfo.SessionInfo.ReadNo, param.Ctrl, forwardList})
-	if err := WriteItem(
-		stream, CITIID_CTRL, bytes, connInfo.CryptCtrlObj, nil); err != nil {
+	bytes, _ := json.Marshal(AuthResponse{resp, hint, connInfo.SessionInfo.SessionToken, connInfo.SessionInfo.WriteNo, connInfo.SessionInfo.ReadNo, param.Ctrl, forwardList})
+	if err := WriteItem(stream, CITIID_CTRL, bytes, connInfo.CryptCtrlObj, nil); err != nil {
 		return nil, true, err
 	}
 	connInfo.SessionInfo.SetState(Session_state_authresponse)
@@ -770,7 +758,7 @@ func ProcessClientAuth(connInfo *ConnInfo, param *TunnelParam, forwardList []For
 			return nil, false, fmt.Errorf("failed to auth -- %s", result.Result)
 		}
 
-		log.Printf("received forwardList -- %v", result.ForwardList)
+		log.Printf("received forwards from remote: %v", result.ForwardList)
 		if result.ForwardList != nil && len(result.ForwardList) > 0 {
 			if forwardList != nil {
 				// クライアントが指定している ForwardList と、
@@ -809,12 +797,10 @@ func ProcessClientAuth(connInfo *ConnInfo, param *TunnelParam, forwardList []For
 			benchBuf := make([]byte, 100)
 			prev := time.Now()
 			for count := 0; count < BENCH_LOOP_COUNT; count++ {
-				if err := WriteItem(
-					stream, CITIID_CTRL, benchBuf, connInfo.CryptCtrlObj, nil); err != nil {
+				if err := WriteItem(stream, CITIID_CTRL, benchBuf, connInfo.CryptCtrlObj, nil); err != nil {
 					return nil, false, err
 				}
-				if _, err := ReadItem(
-					stream, connInfo.CryptCtrlObj, benchBuf, heapCitiBuf); err != nil {
+				if _, err := ReadItem(stream, connInfo.CryptCtrlObj, benchBuf, heapCitiBuf); err != nil {
 					return nil, false, err
 				}
 			}
@@ -822,6 +808,7 @@ func ProcessClientAuth(connInfo *ConnInfo, param *TunnelParam, forwardList []For
 
 			return nil, false, fmt.Errorf("benchmarck -- %s", duration)
 		}
+
 		if param.Ctrl == CTRL_STOP {
 			os.Exit(0)
 		}
@@ -830,21 +817,18 @@ func ProcessClientAuth(connInfo *ConnInfo, param *TunnelParam, forwardList []For
 			if connInfo.SessionInfo.SessionId == 0 {
 				// 新規接続だった場合、セッション情報を更新する
 				//connInfo.SessionInfo.SessionId = result.SessionId
-				connInfo.SessionInfo.UpdateSessionId(
-					result.SessionId, result.SessionToken)
+				connInfo.SessionInfo.UpdateSessionId(result.SessionId, result.SessionToken)
 			} else {
-				return nil, false, fmt.Errorf(
-					"illegal sessionId -- %d, %d",
+				return nil, false, fmt.Errorf("illegal sessionId -- %d, %d",
 					connInfo.SessionInfo.SessionId, result.SessionId)
 			}
 		}
 
-		log.Printf(
-			"sessionId: %d, ReadNo: %d(%d), WriteNo: %d(%d)",
-			result.SessionId, connInfo.SessionInfo.ReadNo, result.WriteNo,
+		log.Printf("sessionId: %d, ReadNo: %d(%d), WriteNo: %d(%d)", result.SessionId, connInfo.SessionInfo.ReadNo, result.WriteNo,
 			connInfo.SessionInfo.WriteNo, result.ReadNo)
 		connInfo.SessionInfo.SetReWrite(result.ReadNo)
 	}
 
+	log.Printf("client auth succeeds, forwards: %v", forwardList)
 	return forwardList, true, nil
 }

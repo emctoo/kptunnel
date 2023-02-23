@@ -2,6 +2,7 @@
 package kptunnel
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -117,18 +118,26 @@ func (handler WrapWSHandler) ServeHTTP(w http.ResponseWriter, req *http.Request)
 	log.Printf("exit -- %v", req)
 }
 
+type WebSocketServer struct {
+	server      *http.Server
+	isReadyChan chan bool // send to this when the server is ready
+	quitChan    chan bool // wait this
+}
+
+func (s *WebSocketServer) Stop(ctx context.Context) {
+	_ = s.server.Shutdown(ctx)
+}
+
 func execWebSocketServer(param TunnelParam, forwardList []ForwardInfo, connectSession func(*ConnInfo, *TunnelParam, *ListenGroup, []ForwardInfo)) *http.Server {
-	// WebSocket 接続時のハンドラ
 	handle := func(ws *websocket.Conn, remoteAddr string) {
-		// binary データを扱うので BinaryFrame をセット
-		ws.PayloadType = websocket.BinaryFrame
+		ws.PayloadType = websocket.BinaryFrame // Set BinaryFrame because we are dealing with binary data
 
 		connInfo := CreateConnInfo(ws, param.EncPass, param.EncCount, nil, true)
 		_, retForwardList, err := ProcessServerAuth(connInfo, &param, remoteAddr, forwardList)
 		if err != nil {
 			connInfo.SessionInfo.SetState(Session_state_authmiss)
-			log.Print("auth error: ", err)
-			time.Sleep(3 * time.Second)
+			log.Err(err).Msgf("server auth process failed, retry in 1 second(s)")
+			time.Sleep(1 * time.Second)
 			return
 		}
 
@@ -138,7 +147,7 @@ func execWebSocketServer(param TunnelParam, forwardList []ForwardInfo, connectSe
 	}
 
 	http.Handle("/", WrapWSHandler{handle, &param})
-	log.Printf("server: %#v", param.ServerInfo)
+	log.Info().Msgf("server: %#v", param.ServerInfo)
 	return &http.Server{Addr: param.ServerInfo.String()}
 	//err := http.ListenAndServe(param.ServerInfo.String(), nil)
 	//if err != nil {
@@ -147,7 +156,6 @@ func execWebSocketServer(param TunnelParam, forwardList []ForwardInfo, connectSe
 }
 
 func StartWebsocketServer(param *TunnelParam, forwardList []ForwardInfo) *http.Server {
-	log.Printf("%#v", param)
 	return execWebSocketServer(*param, forwardList, func(connInfo *ConnInfo, tunnelParam *TunnelParam, listenGroup *ListenGroup, localForwardList []ForwardInfo) {
 		ListenAndNewConnect(false, listenGroup, localForwardList, connInfo, tunnelParam, GetSessionConn)
 	})

@@ -15,7 +15,6 @@ import (
 	"strings"
 
 	"github.com/emctoo/kptunnel"
-	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -277,12 +276,12 @@ func ParseOpt(
 
 func ParseOptClient(mode string, args []string) {
 	var cmd = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
-	userAgent := cmd.String("UA", "Go Http Client", "user agent for websocket")
-	proxyHost := cmd.String("proxy", "", "proxy server")
-	wsPath := cmd.String("wspath", "/", "websocket path")
-	session := cmd.String("session", "", "set the session ID")
+	//userAgent := cmd.String("UA", "Go Http Client", "user agent for websocket")
+	//proxyHost := cmd.String("proxy", "", "proxy server")
+	//wsPath := cmd.String("wspath", "/", "websocket path")
+	//session := cmd.String("session", "", "set the session ID")
 	header := cmd.String("header", "", "http header. ex, 'NAME: VAL'")
-	tlsFlag := cmd.Bool("tls", false, "connect on tls")
+	//tlsFlag := cmd.Bool("tls", false, "connect on tls")
 
 	param, forwardList, usage := ParseOpt(cmd, mode, args)
 	if *header != "" {
@@ -294,28 +293,28 @@ func ParseOptClient(mode string, args []string) {
 		}
 	}
 
-	schema := "ws://"
-	if *tlsFlag {
-		schema = "wss://"
-	}
-	wsQuery := ""
-	if *session == "" {
-		uuidObj := uuid.New()
-		wsQuery = "session=" + uuidObj.String()
-	} else {
-		wsQuery = "session=" + *session
-	}
+	//schema := "ws://"
+	//if *tlsFlag {
+	//	schema = "wss://"
+	//}
+	//wsQuery := ""
+	//if *session == "" {
+	//	uuidObj := uuid.New()
+	//	wsQuery = "session=" + uuidObj.String()
+	//} else {
+	//	wsQuery = "session=" + *session
+	//}
 
-	websocketServerInfo := kptunnel.HostInfo{schema, param.ServerInfo.Name, param.ServerInfo.Port, *wsPath, wsQuery}
+	//websocketServerInfo := kptunnel.HostInfo{schema, param.ServerInfo.Name, param.ServerInfo.Port, *wsPath, wsQuery}
 
 	switch mode {
 	case "client":
 		kptunnel.StartClient(param, forwardList)
 	case "r-client":
 		kptunnel.StartReverseClient(param)
-	case "wsclient":
-		kptunnel.StartWebSocketClient(*userAgent, param, websocketServerInfo, *proxyHost, forwardList)
-	case "r-wsclient":
-		kptunnel.StartReverseWebSocketClient(*userAgent, param, websocketServerInfo, *proxyHost)
+		//case "wsclient":
+		//	kptunnel.StartWebSocketClient(*userAgent, param, websocketServerInfo, *proxyHost, forwardList)
+		//case "r-wsclient":
+		//	kptunnel.StartReverseWebSocketClient(*userAgent, param, websocketServerInfo, *proxyHost)
 	}
 }

@@ -38,10 +38,6 @@ func (lock *Lock) rel() {
 
 var VerboseFlag = false
 
-func IsVerbose() bool {
-	return VerboseFlag
-}
-
 var DebugFlag = false
 
 func IsDebug() bool {
@@ -169,25 +165,19 @@ type CtrlInfo struct {
 }
 
 type ConnInTunnelInfo struct {
-	conn         io.ReadWriteCloser
-	citiId       uint32
-	readPackChan chan []byte
-	end          bool
+	conn            io.ReadWriteCloser
+	citiId          uint32
+	sourceBytesChan chan []byte
+	end             bool
 
-	// フロー制御用 channel
-	syncChan chan bool
+	syncChan chan bool // channel for flow control
 
-	// WritePackList に送り直すパケットを保持するため、
-	// パケットのバッファをリンクで保持しておく。
-	// write 用バッファ。
-	ringBufW *RingBuf
-	// Read 用バッファ。
-	ringBufR *RingBuf
+	// to hold packets resent to WritePackList, Keep packet buffers in the link.
 
-	// このセッションで read したパケットの数
-	ReadNo int64
-	// このセッションで write したパケットの数
-	WriteNo   int64
+	ringBufW  *RingBuf // Buffer for write.
+	ringBufR  *RingBuf // Buffer for read.
+	ReadNo    int64    // number of packets read in this session
+	WriteNo   int64    // number of packets written in this session
 	ReadSize  int64
 	WriteSize int64
 
@@ -368,8 +358,8 @@ func DumpSession(stream io.Writer) {
 				stream, "readState %d, writeState %d\n",
 				citi.ReadState, citi.WriteState)
 			fmt.Fprintf(
-				stream, "syncChan: %d, readPackChan %d, readNo %d, writeNo %d\n",
-				len(citi.syncChan), len(citi.readPackChan), citi.ReadNo, citi.WriteNo)
+				stream, "syncChan: %d, sourceBytesChan %d, readNo %d, writeNo %d\n",
+				len(citi.syncChan), len(citi.sourceBytesChan), citi.ReadNo, citi.WriteNo)
 		}
 
 		fmt.Fprintf(stream, "------------\n")
@@ -406,21 +396,21 @@ func (session *SessionInfo) UpdateSessionId(sessionId int, token string) {
 
 func NewConnInTunnelInfo(conn io.ReadWriteCloser, citiId uint32) *ConnInTunnelInfo {
 	citi := &ConnInTunnelInfo{
-		conn:         conn,
-		citiId:       citiId,
-		readPackChan: make(chan []byte, PACKET_NUM),
-		end:          false,
-		syncChan:     make(chan bool, PACKET_NUM_DIV),
-		ringBufW:     NewRingBuf(PACKET_NUM, BUFSIZE),
-		ringBufR:     NewRingBuf(PACKET_NUM, BUFSIZE),
-		ReadNo:       0,
-		WriteNo:      0,
-		ReadSize:     0,
-		WriteSize:    0,
-		respHeader:   make(chan *CtrlRespHeader),
-		ReadState:    0,
-		WriteState:   0,
-		waitTimeInfo: WaitTimeInfo{},
+		conn:            conn,
+		citiId:          citiId,
+		sourceBytesChan: make(chan []byte, PACKET_NUM),
+		end:             false,
+		syncChan:        make(chan bool, PACKET_NUM_DIV),
+		ringBufW:        NewRingBuf(PACKET_NUM, BUFSIZE),
+		ringBufR:        NewRingBuf(PACKET_NUM, BUFSIZE),
+		ReadNo:          0,
+		WriteNo:         0,
+		ReadSize:        0,
+		WriteSize:       0,
+		respHeader:      make(chan *CtrlRespHeader),
+		ReadState:       0,
+		WriteState:      0,
+		waitTimeInfo:    WaitTimeInfo{},
 	}
 	for count := 0; count < PACKET_NUM_DIV; count++ {
 		citi.syncChan <- true
@@ -428,18 +418,16 @@ func NewConnInTunnelInfo(conn io.ReadWriteCloser, citiId uint32) *ConnInTunnelIn
 	return citi
 }
 
+// get control header
 func (session *SessionInfo) getHeader() *ConnHeader {
 	ctrlInfo := session.ctrlInfo
 	ctrlInfo.waitHeaderCount <- 0
-
 	header := <-ctrlInfo.header
-
 	<-ctrlInfo.waitHeaderCount
-
 	return header
 }
 
-func (session *SessionInfo) addCiti(conn io.ReadWriteCloser, citiId uint32) *ConnInTunnelInfo {
+func (session *SessionInfo) addCiti(role string, conn io.ReadWriteCloser, citiId uint32) *ConnInTunnelInfo {
 	sessionMgr.mutex.get("addCiti")
 	defer sessionMgr.mutex.rel()
 
@@ -447,19 +435,19 @@ func (session *SessionInfo) addCiti(conn io.ReadWriteCloser, citiId uint32) *Con
 		citiId = session.nextCtitId
 		session.nextCtitId++
 		if session.nextCtitId <= CITIID_USR {
-			log.Fatal().Msg("citId overflows")
+			log.Fatal().Str("role", role).Msg("citId overflows")
 		}
 	}
 
 	citi, exists := session.citiId2Info[citiId]
 	if exists {
-		log.Printf("exists Citi -- %d %d", session.SessionId, citiId)
+		log.Info().Str("role", role).Int("sessionId", session.SessionId).Msgf("cit %d exists Citi", citiId)
 		return citi
 	}
 
 	citi = NewConnInTunnelInfo(conn, citiId)
 	session.citiId2Info[citiId] = citi
-	log.Info().Msgf("cit added, sessionId: %d, citId: %d, cit total: %d", session.SessionId, citiId, len(session.citiId2Info))
+	log.Info().Str("role", role).Int("sessionId", session.SessionId).Msgf("cit added, citId: %d, cit total: %d", citiId, len(session.citiId2Info))
 	return citi
 }
 
@@ -483,9 +471,9 @@ func (session *SessionInfo) delCiti(citi *ConnInTunnelInfo) {
 		"delCiti -- %d %d %d", session.SessionId, citi.citiId, len(session.citiId2Info))
 
 	// 詰まれているデータを読み捨てる
-	log.Printf("delCiti discard readPackChan -- %d", len(citi.readPackChan))
-	for len(citi.readPackChan) > 0 {
-		<-citi.readPackChan
+	log.Printf("delCiti discard sourceBytesChan -- %d", len(citi.sourceBytesChan))
+	for len(citi.sourceBytesChan) > 0 {
+		<-citi.sourceBytesChan
 	}
 }
 
@@ -551,8 +539,8 @@ type sessionManager struct {
 	sessionToken2info map[string]*SessionInfo
 	// sessionID -> ConnInfo のマップ
 	sessionId2conn map[int]*ConnInfo
-	// sessionID -> pipeInfo のマップ
-	sessionId2pipe map[int]*pipeInfo
+	// sessionID -> PipeInfo のマップ
+	sessionId2pipe map[int]*PipeInfo
 	// コネクションでのセッションが有効化どうかを判断するためのマップ。
 	// channel を使った方がスマートに出来そうな気がする。。
 	conn2alive map[io.ReadWriteCloser]bool
@@ -563,7 +551,7 @@ type sessionManager struct {
 var sessionMgr = sessionManager{
 	map[string]*SessionInfo{},
 	map[int]*ConnInfo{},
-	map[int]*pipeInfo{},
+	map[int]*PipeInfo{},
 	map[io.ReadWriteCloser]bool{},
 	Lock{}}
 
@@ -588,61 +576,31 @@ func GetSessionInfo(token string) (*SessionInfo, bool) {
 	return sessionInfo, has
 }
 
-// 指定のコネクションの通信が終わるのを待つ
-//func JoinUntilToCloseConn(conn io.ReadWriteCloser) {
-//	log.Printf("join start -- %v\n", conn)
-//
-//	isAlive := func() bool {
-//		sessionMgr.mutex.get("JoinUntilToCloseConn")
-//		defer sessionMgr.mutex.rel()
-//
-//		if alive, has := sessionMgr.conn2alive[conn]; has && alive {
-//			return true
-//		}
-//		return false
-//	}
-//
-//	for {
-//		if !isAlive() {
-//			break
-//		}
-//		time.Sleep(500 * time.Millisecond)
-//	}
-//	log.Printf("join end -- %v\n", conn)
-//}
+// PipeInfo controls information that relays communication between tunnel and connection destination
+type PipeInfo struct {
+	rev int // Revision of connInfo. Counts up each time reconnection is established.
 
-// pipe 情報。
-//
-// tunnel と接続先との通信を中継する制御情報
-type pipeInfo struct {
-	// connInfo のリビジョン。 再接続確立毎にカウントアップする。
-	rev int
-	// 再接続用関数
+	// reconnect function
 	//
-	// @param sessionInfo セッション情報
-	// @return *ConnInfo 接続したコネクション。
-	//     再接続できない場合は nil。
-	//     再接続のリトライは、この関数内で行なう。
-	//     この関数で nil を返すと、再接続を諦める。
+	// @param sessionInfo session information
+	// @return *ConnInfo Connected connection.
+	// - nil if unable to reconnect.
+	// Retry reconnection in this function.
+	// If this function returns nil, give up reconnection.
 	reconnectFunc func(sessionInfo *SessionInfo) *ConnInfo
-	// この Tunnel 接続を終了するべき時に true
-	end bool
-	// // 中継処理終了待合せ用 channel
-	// fin chan bool
-	// 再接続中は true
-	connecting bool
-	// pipe を繋ぐコネクション情報
-	connInfo    *ConnInfo
-	fin         chan bool
-	reconnected chan bool
 
-	// citi が server の場合 true
-	citServerFlag bool
+	end        bool      // true when this Tunnel connection should be terminated
+	fin        chan bool // Channel for waiting for the end of relay processing
+	connecting bool      // true while reconnecting
+	connInfo   *ConnInfo // Connection information connecting pipe
+	// reconnected chan bool //
+
+	citServerFlag bool // true if citi is server
 }
 
-func (info *pipeInfo) sendRelease() {
-	if info.citServerFlag {
-		releaseChan := info.connInfo.SessionInfo.releaseChan //
+func (pipe *PipeInfo) sendRelease() {
+	if pipe.citServerFlag {
+		releaseChan := pipe.connInfo.SessionInfo.releaseChan //
 		if len(releaseChan) == 0 {
 			releaseChan <- true
 		}
@@ -737,18 +695,14 @@ func (info *ConnInfo) readData(work []byte) (*PackItem, error) {
 		switch item.kind {
 		case PACKET_KIND_SYNC:
 			packNo := int64(binary.BigEndian.Uint64(item.buf))
-			if IsDebug() {
-				log.Printf("get sync -- %d", packNo)
-			}
+
+			log.Debug().Msgf("%d - get sync ", packNo)
 			// 相手が受けとったら syncChan を更新して、送信処理を進められるように設定
 			if citi := info.SessionInfo.getCiti(item.citiId); citi != nil {
 				citi.syncChan <- true
 			} else {
-				log.Print("readData discard -- ", item.citiId)
+				log.Debug().Msgf("cit %d not found, discard sync packet", item.citiId)
 			}
-		default:
-			// 読み飛す。
-			//log.Print( "skip kind -- ", kind )
 		}
 	}
 	info.SessionInfo.readSize += int64(len(item.buf))
@@ -761,10 +715,10 @@ func (info *ConnInfo) readData(work []byte) (*PackItem, error) {
 // @return ConnInfo 再接続後のコネクション
 // @return int 再接続後のリビジョン
 // @return bool セッションを終了するかどうか。終了する場合 true
-func (info *pipeInfo) reconnect(txt string, rev int) (*ConnInfo, int, bool) {
+func (pipe *PipeInfo) reconnect(txt string, rev int) (*ConnInfo, int, bool) {
 
-	workRev, workConnInfo := info.getConn()
-	sessionInfo := info.connInfo.SessionInfo
+	workRev, workConnInfo := pipe.getConn()
+	sessionInfo := pipe.connInfo.SessionInfo
 
 	sessionInfo.mutex.get("reconnect")
 	sessionInfo.reconnetWaitState++
@@ -778,23 +732,23 @@ func (info *pipeInfo) reconnect(txt string, rev int) (*ConnInfo, int, bool) {
 		sessionInfo.mutex.get("reconnect-sub")
 		defer sessionInfo.mutex.rel()
 
-		if info.rev != rev {
-			if !info.connecting {
+		if pipe.rev != rev {
+			if !pipe.connecting {
 				sessionInfo.reconnetWaitState--
-				workRev = info.rev
-				workConnInfo = info.connInfo
+				workRev = pipe.rev
+				workConnInfo = pipe.connInfo
 				return true
 			}
 		} else {
-			info.connecting = true
-			info.rev++
+			pipe.connecting = true
+			pipe.rev++
 			reqConnect = true
 			return true
 		}
 		return false
 	}
 
-	if info.reconnectFunc != nil {
+	if pipe.reconnectFunc != nil {
 		for {
 			if sub() {
 				break
@@ -804,12 +758,12 @@ func (info *pipeInfo) reconnect(txt string, rev int) (*ConnInfo, int, bool) {
 		}
 	} else {
 		reqConnect = true
-		info.rev++
+		pipe.rev++
 	}
 
 	if reqConnect {
-		releaseSessionConn(info)
-		prepareClose(info)
+		releaseSessionConn(pipe)
+		reverseTunnelPreCloseHook(pipe)
 
 		if len(sessionInfo.packChan) == 0 {
 			// sessionInfo.packChan 待ちで packetWriter が止まらないように
@@ -817,22 +771,21 @@ func (info *pipeInfo) reconnect(txt string, rev int) (*ConnInfo, int, bool) {
 			sessionInfo.packChan <- PackInfo{nil, PACKET_KIND_DUMMY, CITIID_CTRL}
 		}
 
-		if !info.end {
+		if !pipe.end {
 			sessionInfo.SetState(Session_state_reconnecting)
 
-			workRev = info.rev
-			workInfo := info.reconnectFunc(sessionInfo)
+			workRev = pipe.rev
+			workInfo := pipe.reconnectFunc(sessionInfo)
 			if workInfo != nil {
-				info.connInfo = workInfo
+				pipe.connInfo = workInfo
 				log.Printf("new connInfo -- %p", workInfo)
 				sessionInfo.SetState(Session_state_connected)
 			} else {
-				info.end = true
-				info.connInfo = CreateConnInfo(
-					dummyConn, nil, 0, sessionInfo, sessionInfo.isTunnelServer)
+				pipe.end = true
+				pipe.connInfo = CreateConnInfo(dummyConn, nil, 0, sessionInfo, sessionInfo.isTunnelServer)
 				log.Printf("set dummyConn")
 			}
-			workConnInfo = info.connInfo
+			workConnInfo = pipe.connInfo
 
 			func() {
 				sessionInfo.mutex.get("reconnectFunc-end")
@@ -840,18 +793,18 @@ func (info *pipeInfo) reconnect(txt string, rev int) (*ConnInfo, int, bool) {
 				sessionInfo.reconnetWaitState--
 			}()
 
-			info.connecting = false
+			pipe.connecting = false
 		}
 	}
 
 	log.Printf(
 		"connected: [%s] rev -- %d, end -- %v, %p",
-		txt, workRev, info.end, workConnInfo)
-	return workConnInfo, workRev, info.end
+		txt, workRev, pipe.end, workConnInfo)
+	return workConnInfo, workRev, pipe.end
 }
 
 // セッションのコネクションを開放する
-func releaseSessionConn(info *pipeInfo) {
+func releaseSessionConn(info *PipeInfo) {
 	connInfo := info.connInfo
 	log.Printf("releaseSessionConn -- %d", connInfo.SessionInfo.SessionId)
 	sessionMgr.mutex.get("releaseSessionConn")
@@ -916,67 +869,58 @@ func WaitPauseSession(sessionInfo *SessionInfo) bool {
 //
 // @return int リビジョン情報
 // @return *ConnInfo コネクション情報
-func (info *pipeInfo) getConn() (int, *ConnInfo) {
-	sessionInfo := info.connInfo.SessionInfo
+func (pipe *PipeInfo) getConn() (int, *ConnInfo) {
+	sessionInfo := pipe.connInfo.SessionInfo
 	sessionInfo.mutex.get("getConn")
 	defer sessionInfo.mutex.rel()
 
-	return info.rev, info.connInfo
+	return pipe.rev, pipe.connInfo
 }
 
-// Tunnel -> dst の pipe を処理する。
-//
-// 処理終了後は info.fin にデータを書き込む。
-//
-// @param info pipe 情報
-// @param dst 送信先
-func tunnel2Stream(sessionInfo *SessionInfo, dst *ConnInTunnelInfo, fin chan bool) {
-
+// tunnel stream => conn
+func tunnel2Stream(sessionInfo *SessionInfo, destCit *ConnInTunnelInfo, exitChan chan bool) {
 	for {
-		dst.ReadState = 10
-		prev := time.Now()
-		readBuf := <-dst.readPackChan
-		dst.ReadState = 20
-		span := time.Now().Sub(prev)
-		dst.waitTimeInfo.tunnel2Stream += span
-		if IsVerbose() && span > 5*time.Millisecond {
-			log.Printf("tunnel2Stream -- %d, %s", dst.ReadNo, span)
+		destCit.ReadState = 10
+
+		waitingTimeStart := time.Now()
+		readBuf := <-destCit.sourceBytesChan
+		destCit.ReadState = 20
+		waitingTime := time.Now().Sub(waitingTimeStart)
+		destCit.waitTimeInfo.tunnel2Stream += waitingTime
+		if waitingTime > 5*time.Millisecond {
+			log.Debug().Msgf("wait bytes channel, readNo: %d, cost: %s", destCit.ReadNo, waitingTime)
 		}
 		readSize := len(readBuf)
+		log.Debug().Msgf("read from bytes channel, readNo: %d, size: %d", destCit.ReadNo, readSize)
 
-		if IsDebug() {
-			log.Printf("tunnel2Stream -- %d, %d", dst.ReadNo, readSize)
-		}
-
-		if (dst.ReadNo % PACKET_NUM_BASE) == PACKET_NUM_BASE-1 {
-			// 一定数読み込んだら SYNC を返す
+		if (destCit.ReadNo % PACKET_NUM_BASE) == PACKET_NUM_BASE-1 { // send SYNC after reading a certain number
 			var buffer bytes.Buffer
-			binary.Write(&buffer, binary.BigEndian, dst.ReadNo)
-			dst.ReadState = 30
-			if IsDebug() {
-				log.Printf("put sync")
-			}
-			sessionInfo.packChan <- PackInfo{buffer.Bytes(), PACKET_KIND_SYNC, dst.citiId}
+			_ = binary.Write(&buffer, binary.BigEndian, destCit.ReadNo)
+			destCit.ReadState = 30
+
+			sessionInfo.packChan <- PackInfo{buffer.Bytes(), PACKET_KIND_SYNC, destCit.citiId}
+			log.Info().Msg("sync sent to packet chan")
 		}
-		dst.ReadNo++
-		dst.ReadSize += int64(len(readBuf))
+		destCit.ReadNo++
+		destCit.ReadSize += int64(len(readBuf))
 
 		if readSize == 0 {
-			log.Printf("tunnel2Stream: read 0 end -- %d", len(sessionInfo.packChan))
+			log.Warn().Msgf("read 0-size from bytes channel, exit")
 			break
 		}
-		dst.ReadState = 40
-		_, writeerr := dst.conn.Write(readBuf)
-		dst.ReadState = 50
-		if writeerr != nil {
-			log.Printf("write err log: ReadNo=%d, err=%s", dst.ReadNo, writeerr)
+		destCit.ReadState = 40
+
+		_, writeErr := destCit.conn.Write(readBuf)
+		destCit.ReadState = 50
+
+		if writeErr != nil {
+			log.Err(writeErr).Msgf("conn writing failed, readNo: %d, exit", destCit.ReadNo)
 			break
 		}
 	}
 
-	// dst.readPackChan にデータが詰まれないように削除する
-	sessionInfo.delCiti(dst)
-	fin <- true
+	sessionInfo.delCiti(destCit) // Remove data from destCit.sourceBytesChan to prevent stuffing
+	exitChan <- true
 }
 
 // Tunnel へデータの再送を行なう
@@ -985,7 +929,7 @@ func tunnel2Stream(sessionInfo *SessionInfo, dst *ConnInTunnelInfo, fin chan boo
 // @param connInfo コネクション情報
 // @param rev リビジョン
 // @return bool 処理を続ける場合 true
-func rewirte2Tunnel(info *pipeInfo, connInfoRev *ConnInfoRev) bool {
+func rewirte2Tunnel(info *PipeInfo, connInfoRev *ConnInfoRev) bool {
 	// 再接続後にパケットの再送を行なう
 	sessionInfo := connInfoRev.connInfo.SessionInfo
 	if sessionInfo.ReWriteNo == -1 {
@@ -1035,78 +979,58 @@ func rewirte2Tunnel(info *pipeInfo, connInfoRev *ConnInfoRev) bool {
 	return true
 }
 
-// src -> tunnel の通信の中継処理を行なう
-//
-// @param src 送信元
-// @param info pipe 情報
-func stream2Tunnel(src *ConnInTunnelInfo, info *pipeInfo, fin chan bool) {
-
-	_, connInfo := info.getConn()
+// conn => tunnel stream
+func stream2Tunnel(src *ConnInTunnelInfo, pipeInfo *PipeInfo, fin chan bool) {
+	_, connInfo := pipeInfo.getConn()
 	sessionInfo := connInfo.SessionInfo
-
+	sessionId := sessionInfo.SessionId
 	packChan := sessionInfo.packChan
 
 	end := false
 	for !end {
 		src.WriteState = 10
 		if (src.WriteNo % PACKET_NUM_BASE) == 0 {
-			// tunnel 切断復帰の再接続時の再送信用バッファを残しておくため、
-			// PACKET_NUM_BASE 毎に syncChan を取得し、
-			// 相手が受信していないのに送信し過ぎないようにする。
-			prev := time.Now()
+			// In order to leave a buffer for retransmission when reconnecting after tunnel disconnection, get syncChan for every PACKET_NUM_BASE
+			// Don't send too much when the other party hasn't received it.
+			syncWaitingTimeStart := time.Now()
 			<-src.syncChan
-			span := time.Now().Sub(prev)
+			span := time.Now().Sub(syncWaitingTimeStart)
 			src.waitTimeInfo.stream2Tunnel += span
-			if IsVerbose() && span >= 5*time.Millisecond {
-				log.Printf(
-					"stream2Tunnel -- %s %s %d",
+			if span >= 5*time.Millisecond {
+				log.Debug().Int("sessionId", sessionId).Msgf("conn => tunnel stream, span: %s, total span: %s, src writeNo: %d",
 					span, src.waitTimeInfo.stream2Tunnel, src.WriteNo)
 			}
-			if IsDebug() {
-				log.Printf("obtain sync")
-			}
+			log.Debug().Int("sessionId", sessionId).Msgf("get sync packet")
 		}
 		src.WriteNo++
-
 		src.WriteState = 20
 
-		// バッファの切り替え
-		buf := src.ringBufW.getNext()
-
-		var readSize int
-		var readerr error
-		readSize, readerr = src.conn.Read(buf)
+		buf := src.ringBufW.getNext() // switch buffer
+		readSize, readErr := src.conn.Read(buf)
 		src.WriteState = 30
 
-		if IsDebug() {
-			log.Printf("stream2Tunnel -- %d, %d", src.WriteNo, readSize)
-		}
-
-		if readerr != nil {
-			log.Printf("read err log: writeNo=%d, err=%s", sessionInfo.WriteNo, readerr)
-			// 入力元が切れたら、転送先に 0 バイトデータを書き込む
-			packChan <- PackInfo{make([]byte, 0), PACKET_KIND_NORMAL, src.citiId}
+		log.Debug().Int("sessionId", sessionId).Msgf("conn => tunnel stream, WriteNo: %d, readSize: %d", src.WriteNo, readSize)
+		if readErr != nil {
+			log.Err(readErr).Int("sessionId", sessionId).Msgf("conn bytes reading err, writeNo: %d", sessionInfo.WriteNo)
+			packChan <- PackInfo{make([]byte, 0), PACKET_KIND_NORMAL, src.citiId} // write 0 bytes data to the destination when the input source is dead
 			break
 		}
 		if readSize == 0 {
-			log.Print("ignore 0 size packet.")
+			log.Warn().Int("sessionId", sessionInfo.SessionId).Msg("ignore 0-size packet")
 			continue
 		}
 		src.WriteSize += int64(readSize)
-
 		src.WriteState = 40
 
 		if (src.WriteNo%PACKET_NUM_BASE) == 0 && len(src.syncChan) == 0 {
-			// パケットグループの最後のパケットで、SYNC が来ていない場合は、
-			// 送信前に SYNC を待つ。
-			work := <-src.syncChan
-			// SYNC の先読みしたので、SYNC を書き戻す。
-			src.syncChan <- work
+			work := <-src.syncChan // if it's the last packet in the packet group and no SYNC is coming, wait for SYNC before sending
+			src.syncChan <- work   // Since we read ahead SYNC, we write back SYNC.
 		}
 		src.WriteState = 50
 
 		packChan <- PackInfo{buf[:readSize], PACKET_KIND_NORMAL, src.citiId}
 	}
+
 	fin <- true
 }
 
@@ -1115,9 +1039,9 @@ type ConnInfoRev struct {
 	rev      int
 }
 
-func bin2Ctrl(sessionInfo *SessionInfo, buf []byte) {
+func binaryToControl(sessionInfo *SessionInfo, buf []byte) {
 	if len(buf) == 0 {
-		log.Print("bin2Ctrl 0")
+		log.Print("ignore empty buffer 0")
 		return
 	}
 	kind := buf[0]
@@ -1129,26 +1053,26 @@ func bin2Ctrl(sessionInfo *SessionInfo, buf []byte) {
 	case CTRL_HEADER:
 		header := ConnHeader{}
 		if err := json.NewDecoder(&buffer).Decode(&header); err != nil {
-			log.Fatal().Msgf("failed to read header: %v", err)
+			log.Fatal().Err(err).Msgf("fail to parse header")
 		}
-		log.Print("header ", header)
 		sessionInfo.ctrlInfo.header <- &header
+		log.Info().Msgf("ctrl header sent to stream")
 	case CTRL_RESP_HEADER:
 		resp := CtrlRespHeader{}
 		if err := json.NewDecoder(&buffer).Decode(&resp); err != nil {
 			log.Fatal().Msgf("failed to read header: %v", err)
 		}
-		log.Print("resp ", resp)
 		if citi := sessionInfo.getCiti(resp.CitiId); citi != nil {
 			citi.respHeader <- &resp
+			log.Info().Msgf("ctrl response header sent to cit")
 		} else {
-			log.Print("bin2Ctrl discard -- ", resp.CitiId)
+			log.Error().Msgf("citId %d not found, ctrl response header is discarded", resp.CitiId)
 		}
 	}
 }
 
-func packetReader(info *pipeInfo) {
-	rev, connInfo := info.getConn()
+func packetReader(pipeInfo *PipeInfo) {
+	rev, connInfo := pipeInfo.getConn()
 	sessionInfo := connInfo.SessionInfo
 
 	buf := make([]byte, BUFSIZE)
@@ -1159,62 +1083,51 @@ func packetReader(info *pipeInfo) {
 			sessionInfo.readState = 10
 			if packet, err := connInfo.readData(buf); err != nil {
 				sessionInfo.readState = 20
-				log.Printf(
-					"tunnel read err log: %p, readNo=%d, err=%s",
-					connInfo, sessionInfo.ReadNo, err)
+				log.Err(err).Msgf("fail to read from conn, readNo: %d", sessionInfo.ReadNo)
+
 				end := false
-				connInfo.Conn.Close()
-				connInfo, rev, end = info.reconnect("read", rev)
+				_ = connInfo.Conn.Close()
+				connInfo, rev, end = pipeInfo.reconnect("read", rev)
 				if end {
 					readSize = 0
-					info.end = true
+					pipeInfo.end = true
 					break
 				}
 			} else {
 				sessionInfo.readState = 30
-				if IsDebug() {
-					log.Printf(
-						"packetReader %d, %d",
-						sessionInfo.readState, len(packet.buf))
-				}
+				log.Debug().Msgf("read from conn, size: %d", len(packet.buf))
+
 				if packet.citiId == CITIID_CTRL {
-					bin2Ctrl(sessionInfo, packet.buf)
-					// 処理が終わらないように、ダミーで readSize を 1 にセット
-					readSize = 1
+					binaryToControl(sessionInfo, packet.buf)
+					readSize = 1 // set readSize to 1 so that the process doesn't end
 				} else {
 					if citi = sessionInfo.getCiti(packet.citiId); citi != nil {
-						// packet.buf は citi.readPackChan に
-						// 入れて別スレッドで処理される。
-						// 一方で packet.buf は、固定アドレスを参照するため、
-						// 別スレッドで処理される前に readData すると packet.buf の内容が
-						// 上書きされてしまう。
-						// それを防ぐため copy する。
+						// packet.buf to citi.sourceBytesChan
+						// put in and processed in another thread.
+						// On the other hand, packet.buf refers to a fixed address, so if you readData before processing in another thread, the contents of packet.buf will be overwritten.
+						// Copy to prevent that.
 
 						// cloneBuf := citi.ringBufR.getNext()[:len(packet.buf)]
 						// copy( cloneBuf, packet.buf )
-						citi.ringBufR.getNext()
+						citi.ringBufR.getNext() // TODO comment out this?
+
 						cloneBuf := packet.buf
-
-						prev := time.Now()
-						citi.readPackChan <- cloneBuf
-						span := time.Now().Sub(prev)
-
-						citi.waitTimeInfo.packetReader += span
-						if IsVerbose() && span >= 5*time.Millisecond {
-							log.Printf(
-								"packetReader -- %s %s %d",
-								span, citi.waitTimeInfo.packetReader, citi.ReadNo)
+						waitingTimeStart := time.Now()
+						citi.sourceBytesChan <- cloneBuf // TODO buffer is sent over channel, need to copy?
+						waitingTime := time.Now().Sub(waitingTimeStart)
+						citi.waitTimeInfo.packetReader += waitingTime
+						if waitingTime >= 5*time.Millisecond {
+							log.Debug().Msgf("get buffer from bytes channel, readNo: %d, cost: %s", citi.ReadNo, waitingTime)
 						}
-
 						readSize = len(cloneBuf)
 					} else {
-						log.Printf("packetReader discard -- %d", packet.citiId)
+						log.Info().Msgf("cit not found: %d, discard the packet", packet.citiId)
 						readSize = 1
 					}
 				}
 				if readSize == 0 {
 					if packet.citiId == CITIID_CTRL {
-						info.end = true
+						pipeInfo.end = true
 					}
 				}
 				break
@@ -1224,34 +1137,29 @@ func packetReader(info *pipeInfo) {
 
 		if readSize == 0 {
 			if citi != nil && len(citi.syncChan) == 0 {
-				// 終了する際に、 stream2Tunnel() 側が待ちになっている可能性があるので
-				// ここで syncChan を通知してやる
-				citi.syncChan <- true
+				citi.syncChan <- true // when exiting, stream2Tunnel() may be waiting, notify syncChan here
 			}
 			sessionInfo.readState = 50
-			if info.end {
-				info.sendRelease()
-				for _, workciti := range sessionInfo.citiId2Info {
-					if len(workciti.syncChan) == 0 {
-						// 終了する際に、 stream2Tunnel() 側が待ちになっている可能性があるので
-						// ここで syncChan を通知してやる
-						workciti.syncChan <- true
+
+			if pipeInfo.end { // stream ends or read 0-size buffer
+				pipeInfo.sendRelease()
+				for _, workCiti := range sessionInfo.citiId2Info { // end all tunnel streams
+					if len(workCiti.syncChan) == 0 {
+						workCiti.syncChan <- true // when exiting, stream2Tunnel() may be waiting, notify syncChan here
 					}
 				}
-				log.Print("read 0 end")
 				break
 			}
 		}
 	}
 
-	prepareClose(info)
-
-	log.Print("packetReader end -- ", sessionInfo.SessionId)
-	info.fin <- true
+	reverseTunnelPreCloseHook(pipeInfo)
+	log.Info().Int("sessionId", sessionInfo.SessionId).Msgf("conn reader exits")
+	pipeInfo.fin <- true
 }
 
 func reconnectAndRewrite(
-	info *pipeInfo, connInfoRev *ConnInfoRev) bool {
+	info *PipeInfo, connInfoRev *ConnInfoRev) bool {
 	end := false
 	connInfoRev.connInfo, connInfoRev.rev, end =
 		info.reconnect("write", connInfoRev.rev)
@@ -1275,7 +1183,7 @@ func reconnectAndRewrite(
 // @param packet 送信するデータ
 // @param connInfoRev コネクション情報
 func packetWriterSub(
-	info *pipeInfo, packet *PackInfo, connInfoRev *ConnInfoRev) bool {
+	info *PipeInfo, packet *PackInfo, connInfoRev *ConnInfoRev) bool {
 
 	sessionInfo := connInfoRev.connInfo.SessionInfo
 	for {
@@ -1307,7 +1215,7 @@ func packetWriterSub(
 	}
 }
 
-func packetEncrypter(info *pipeInfo) {
+func packetEncrypter(info *PipeInfo) {
 	packChan := info.connInfo.SessionInfo.packChan
 
 	ringBufEnc := info.connInfo.SessionInfo.ringBufEnc
@@ -1340,102 +1248,84 @@ func packetEncrypter(info *pipeInfo) {
 	}
 }
 
-// packet を stream に出力する
-//
-// @param packet パケット
-// @param stream 送信先
-// @param connInfo コネクション
-// @param validPost postWriteData処理をコールする場合 true
-// @return bool 送信を続ける場合 true
-// @return error 送信失敗した場合の error
-func writePack(
-	packet *PackInfo, stream io.Writer,
-	connInfo *ConnInfo, validPost bool) (bool, error) {
-	var writeerr error
+// write packets to conn
+func writePack(packet *PackInfo, stream io.Writer, connInfo *ConnInfo, validPost bool) (bool, error) {
+	var writeErr error
+	sessionId := connInfo.SessionInfo.SessionId
 
 	switch packet.kind {
 	case PACKET_KIND_EOS:
-		log.Printf("eos -- sessionId %d", connInfo.SessionInfo.SessionId)
+		log.Debug().Int("sessionId", sessionId).Msgf("eos")
 		return false, nil
 	case PACKET_KIND_SYNC:
-		if IsDebug() {
-			log.Printf("write sync")
-		}
-		writeerr = WriteSimpleKind(stream, PACKET_KIND_SYNC, packet.citiId, packet.bytes)
+		writeErr = WriteSimpleKind(stream, PACKET_KIND_SYNC, packet.citiId, packet.bytes)
+		log.Debug().Int("sessionId", sessionId).Msgf("sync sent")
 	case PACKET_KIND_NORMAL:
-		writeerr = connInfo.writeData(stream, packet.citiId, packet.bytes)
+		writeErr = connInfo.writeData(stream, packet.citiId, packet.bytes)
 	case PACKET_KIND_NORMAL_DIRECT:
-		writeerr = connInfo.writeDataDirect(stream, packet.citiId, packet.bytes)
+		writeErr = connInfo.writeDataDirect(stream, packet.citiId, packet.bytes)
 	case PACKET_KIND_DUMMY:
-		writeerr = WriteDummy(stream)
+		writeErr = WriteDummy(stream)
 		validPost = false
 	default:
 		log.Fatal().Msgf("illegal kind: %d", packet.kind)
 	}
 
-	if validPost && writeerr == nil {
+	if validPost && writeErr == nil {
 		connInfo.SessionInfo.postWriteData(packet)
 	}
-	return true, writeerr
+	return true, writeErr
 }
 
-// Tunnel へのパケット書き込み関数
-//
-// go routine で実行される
-//
-// @param info pipe制御情報
-// @param packChan PackInfo を受けとる channel
-func packetWriter(info *pipeInfo) {
-
-	sessionInfo := info.connInfo.SessionInfo
-	packChan := sessionInfo.packChan
+// packChan => conn
+func packetWriter(role string, pipeInfo *PipeInfo) {
+	sessionInfo := pipeInfo.connInfo.SessionInfo
+	sessionId := sessionInfo.SessionId
+	packetChan := sessionInfo.packChan
 	if PRE_ENC {
-		packChan = sessionInfo.packChanEnc
+		packetChan = sessionInfo.packChanEnc
 	}
 
 	var connInfoRev ConnInfoRev
-	connInfoRev.rev, connInfoRev.connInfo = info.getConn()
+	connInfoRev.rev, connInfoRev.connInfo = pipeInfo.getConn()
 
 	var buffer bytes.Buffer
 
 	packetNo := 0
 	for {
 		sessionInfo.writeState = 10
-
 		packetNo++
-		prev := time.Now()
-		packet := <-packChan
-		span := time.Now().Sub(prev)
+
+		packetChanWaitingTimeStart := time.Now()
+		packet := <-packetChan
+		span := time.Now().Sub(packetChanWaitingTimeStart)
 		if span > 500*time.Microsecond {
 			sessionInfo.packetWriterWaitTime += span
-			if IsVerbose() && span > 5*time.Millisecond {
-				log.Printf("packetWriterWaitTime -- %d, %s", packetNo, span)
+			if span > 5*time.Millisecond {
+				log.Debug().Str("role", role).Int("sessionId", sessionId).Msgf("%d - wait packetChan(%v) for %s", packetNo, packetChan, span)
 			}
 		}
-
 		sessionInfo.writeState = 20
 
 		buffer.Reset()
 
-		end := false
-		for len(packChan) > 0 && packet.kind == PACKET_KIND_NORMAL {
-			// 書き込み依頼が残っている場合、効率化のため一旦 buffer に出力して結合する。
-
-			if buffer.Len()+len(packet.bytes) > MAX_PACKET_SIZE {
+		end := false // for break outer loop, set when error sending buffer
+		for len(packetChan) > 0 && packet.kind == PACKET_KIND_NORMAL {
+			// packets are buffered, sent in batch
+			if buffer.Len()+len(packet.bytes) > MAX_PACKET_SIZE { // can hold more, have to send now
 				break
 			}
 
-			if cont, err := writePack(
-				&PackInfo{packet.bytes, PACKET_KIND_NORMAL_DIRECT, packet.citiId},
-				&buffer, connInfoRev.connInfo, true); err != nil {
-				log.Fatal().Msgf("writePack error: %v", err)
+			if cont, err := writePack(&PackInfo{packet.bytes, PACKET_KIND_NORMAL_DIRECT, packet.citiId}, &buffer, connInfoRev.connInfo, true); err != nil {
+				log.Fatal().Str("role", role).Int("sessionId", sessionId).Err(err).Msgf("fail to write to conn")
 			} else if !cont {
 				end = true
 				break
 			}
 
-			packet = <-packChan
+			packet = <-packetChan // read more
 		}
+
 		if end {
 			break
 		}
@@ -1443,126 +1333,111 @@ func packetWriter(info *pipeInfo) {
 		sessionInfo.writeState = 30
 
 		if buffer.Len() != 0 {
-			// buffer にデータがセットされていれば、
-			// 結合データがあるので buffer を書き込む
-			//log.Print( "concat -- ", len( buffer.Bytes() ) )
+			// If data is set in buffer, write buffer as there is bound data
 			if _, err := connInfoRev.connInfo.Conn.Write(buffer.Bytes()); err != nil {
-				log.Printf(
-					"tunnel batch write err log: %p, writeNo=%d, err=%s",
-					connInfoRev.connInfo, connInfoRev.connInfo.SessionInfo.WriteNo, err)
-				// batch の buffer は、reconnect 前の暗号で暗号化しているため、
-				// そのまま送信すると受信側で decrypt に失敗する。
-				// それを回避するため batch 書き込みに失敗した場合、
-				// batch 書き込みはせずに rewrite でリカバリする。
-				if !reconnectAndRewrite(info, &connInfoRev) {
+				log.Err(err).Str("role", role).Int("sessionId", sessionId).Msgf("tunnel batch writing failed, writeNo: %d", connInfoRev.connInfo.SessionInfo.WriteNo)
+
+				// Batch buffer is encrypted with the cipher before reconnect, so if sent as is, decryption fails on the receiving side.
+				// To avoid that, if batch write fails, recover with rewrite without batch writing.
+				if !reconnectAndRewrite(pipeInfo, &connInfoRev) {
 					break
 				}
 			}
 		}
 
 		sessionInfo.writeState = 40
-		if !packetWriterSub(info, &packet, &connInfoRev) {
+		if !packetWriterSub(pipeInfo, &packet, &connInfoRev) {
 			break
 		}
 	}
+	log.Info().Str("role", role).Int("sessionId", sessionId).Msg("writing to conn ends")
 
-	log.Print("packetWriter end -- ", sessionInfo.SessionId)
-	info.fin <- true
-
+	pipeInfo.fin <- true
 }
 
-func NewPipeInfo(
-	connInfo *ConnInfo, citServerFlag bool,
-	reconnect func(sessionInfo *SessionInfo) *ConnInfo) (*pipeInfo, bool) {
-
-	sessionMgr.mutex.get("NewPipeInfo")
+func newPipeInfo(connInfo *ConnInfo, citServerFlag bool, reconnect func(sessionInfo *SessionInfo) *ConnInfo) (*PipeInfo, bool) {
+	sessionMgr.mutex.get("newPipeInfo")
 	defer sessionMgr.mutex.rel()
 
 	sessionInfo := connInfo.SessionInfo
-
 	info, has := sessionMgr.sessionId2pipe[sessionInfo.SessionId]
 	if has {
 		return info, false
 	}
 
-	info = &pipeInfo{
-		0, reconnect, false, false, connInfo,
-		make(chan bool), make(chan bool), citServerFlag}
+	info = &PipeInfo{
+		reconnectFunc: reconnect,
+		connInfo:      connInfo,
+		fin:           make(chan bool),
+		// reconnected:   make(chan bool),
+		citServerFlag: citServerFlag,
+	}
 	sessionMgr.sessionId2pipe[sessionInfo.SessionId] = info
-
 	return info, true
 }
 
-func startRelaySession(
-	connInfo *ConnInfo, interval int, citServerFlag bool,
-	reconnect func(sessionInfo *SessionInfo) *ConnInfo) *pipeInfo {
-
-	info, newSession := NewPipeInfo(connInfo, citServerFlag, reconnect)
-
+func startRelaySession(role string, connInfo *ConnInfo, interval int, citServerFlag bool, reconnect func(sessionInfo *SessionInfo) *ConnInfo) *PipeInfo {
+	pipeInfo, isSessionNew := newPipeInfo(connInfo, citServerFlag, reconnect)
 	connInfo.SessionInfo.SetState(Session_state_connected)
-
-	if !newSession {
-		log.Printf("skip process reconnect -- %d", connInfo.SessionInfo.SessionId)
-		return info
+	sessionId := connInfo.SessionInfo.SessionId
+	if !isSessionNew {
+		log.Info().Str("role", role).Int("sessionId", sessionId).Msgf("not a new session, skip process reconnect")
+		return pipeInfo
 	}
 
-	go packetWriter(info)
-	go packetReader(info)
+	log.Info().Str("role", role).Int("sessionId", sessionId).Msgf("launch reader/writer routines ...")
+	go packetWriter(role, pipeInfo)
+	go packetReader(pipeInfo)
 	if PRE_ENC {
-		go packetEncrypter(info)
+		go packetEncrypter(pipeInfo)
 	}
 
 	sessionInfo := connInfo.SessionInfo
 
-	keepalive := func() {
-		// 一定時間の無通信で切断されないように、 20 秒に一回
-		for !info.end {
-			for sleepTime := 0; sleepTime < interval; sleepTime += SLEEP_INTERVAL {
-				time.Sleep(SLEEP_INTERVAL * time.Millisecond)
-				if info.end {
+	// keepalive goroutine
+	go func() {
+		log.Info().Str("role", role).Msgf("start keepalive routine ...")
+
+		// TODO update this to a better way
+		for !pipeInfo.end {
+			for sleepTime := 0; sleepTime < interval; sleepTime += KeepaliveSleepMs {
+				time.Sleep(KeepaliveSleepMs * time.Millisecond)
+				if pipeInfo.end {
 					break
 				}
 			}
-			if !info.connecting {
+			if !pipeInfo.connecting {
 				sessionInfo.packChan <- PackInfo{nil, PACKET_KIND_DUMMY, CITIID_CTRL}
 			}
 		}
-		log.Printf("end keepalive -- %d", sessionInfo.SessionId)
-	}
-	go keepalive()
+		log.Info().Int("sessionId", sessionId).Msgf("keepalive routine exits")
+	}()
 
-	return info
+	return pipeInfo
 }
 
-// 無通信を避けるため keep alive 用通信を行なう間隔 (ミリ秒)
-const KEEP_ALIVE_INTERVAL = 20 * 1000
+// KeepaliveSleepMs interval for keepalive check
+// If this is long, it takes time to wait for relaySession post-processing.
+// If it's short, it will be heavy.
+const KeepaliveSleepMs = 500
 
-// keep alive の時間経過を確認する間隔 (ミリ秒)。
-// これが長いと、 relaySession の後処理の待ち時間がかかる。
-// 短いと、負荷がかかる。
-const SLEEP_INTERVAL = 500
-
-// tunnel で トンネリングされている中で、 local と tunnel の通信を中継する
-//
-// @param connInfo Tunnel のコネクション情報
-// @param local Tunnel との接続先
-// @param reconnect 再接続関数
-func relaySession(info *pipeInfo, citi *ConnInTunnelInfo, hostInfo HostInfo) {
+// Relay tunnel stream between transport stream
+func relaySession(info *PipeInfo, citi *ConnInTunnelInfo, hostInfo HostInfo) {
 	log.Printf("connected and relay session to %s now", hostInfo.String())
 
-	fin := make(chan bool)
-
+	exitChan := make(chan bool)
 	sessionInfo := info.connInfo.SessionInfo
 
-	go stream2Tunnel(citi, info, fin)
-	go tunnel2Stream(sessionInfo, citi, fin)
+	go stream2Tunnel(citi, info, exitChan)
+	go tunnel2Stream(sessionInfo, citi, exitChan)
 
-	<-fin
-	citi.conn.Close()
-	<-fin
+	<-exitChan
+	_ = citi.conn.Close()
+
+	<-exitChan
 
 	log.Printf("close citi: sessionId %d, citiId %d, read %d, write %d", sessionInfo.SessionId, citi.citiId, citi.ReadSize, citi.WriteSize)
-	log.Printf("close citi: readNo %d, writeNo %d, readPackChan %d", citi.ReadNo, citi.WriteNo, len(citi.readPackChan))
+	log.Printf("close citi: readNo %d, writeNo %d, sourceBytesChan %d", citi.ReadNo, citi.WriteNo, len(citi.sourceBytesChan))
 	log.Printf("close citi: session readNo %d, session writeNo %d", sessionInfo.ReadNo, sessionInfo.WriteNo)
 	log.Printf("waitTime: stream2Tunnel %s, tunnel2Stream %s, packetWriter %s, packetReader %s\n",
 		citi.waitTimeInfo.stream2Tunnel, citi.waitTimeInfo.tunnel2Stream, sessionInfo.packetWriterWaitTime, citi.waitTimeInfo.packetReader)
@@ -1620,11 +1495,11 @@ type NetListener struct {
 	listener net.Listener
 }
 
-func (this *NetListener) Accept() (io.ReadWriteCloser, error) {
-	return this.listener.Accept()
+func (l *NetListener) Accept() (io.ReadWriteCloser, error) {
+	return l.listener.Accept()
 }
-func (this *NetListener) Close() error {
-	return this.listener.Close()
+func (l *NetListener) Close() error {
+	return l.listener.Close()
 }
 
 type Listener interface {
@@ -1652,43 +1527,43 @@ func (group *ListenGroup) Close() {
 }
 
 func NewListen(isClient bool, forwardList []ForwardInfo) (*ListenGroup, []ForwardInfo) {
-	return NewListenWithMaker(
-		isClient, forwardList,
-		func(dst string) (Listener, error) {
-			listen, err := net.Listen("tcp", dst)
-			if err != nil {
-				return nil, err
-			}
-			return &NetListener{listen}, nil
-		})
+	return NewListenWithMaker(isClient, forwardList, func(dst string) (Listener, error) {
+		listen, err := net.Listen("tcp", dst)
+		if err != nil {
+			return nil, err
+		}
+		return &NetListener{listen}, nil
+	})
 }
 
-func NewListenWithMaker(
-	isClient bool, forwardList []ForwardInfo,
-	listenMaker func(dst string) (Listener, error)) (*ListenGroup, []ForwardInfo) {
+func NewListenWithMaker(isClient bool, forwardList []ForwardInfo, listenMaker func(dst string) (Listener, error)) (*ListenGroup, []ForwardInfo) {
 	group := ListenGroup{[]ListenInfo{}}
-	localForward := []ForwardInfo{}
+	var localForwards []ForwardInfo
 
 	for _, forwardInfo := range forwardList {
-		if isClient && !forwardInfo.IsReverseTunnel ||
-			!isClient && forwardInfo.IsReverseTunnel {
+		if (isClient && !forwardInfo.IsReverseTunnel) || (!isClient && forwardInfo.IsReverseTunnel) {
 			local, err := listenMaker(forwardInfo.Src.String())
 			if err != nil {
 				log.Fatal().Err(err)
 				return nil, []ForwardInfo{}
 			}
 			group.list = append(group.list, ListenInfo{local, forwardInfo})
+			log.Printf("%s added to listener group", forwardInfo.String())
 		} else {
-			localForward = append(localForward, forwardInfo)
+			localForwards = append(localForwards, forwardInfo)
+			log.Printf("%s added to local forwards", forwardInfo.String())
 		}
 	}
 
-	return &group, localForward
+	return &group, localForwards
 }
 
-func ListenNewConnectSub(listenInfo ListenInfo, info *pipeInfo) {
+func ListenNewConnectSub(role string, listenInfo ListenInfo, pipeInfo *PipeInfo) {
+	sessionId := pipeInfo.connInfo.SessionInfo.SessionId
+
 	process := func() {
-		log.Printf("listening connections at %s ... (targeting %s)", listenInfo.forwardInfo.Src.String(), listenInfo.forwardInfo.Dst.String())
+		log.Info().Str("role", role).Int("sessionId", sessionId).Msgf("listening connections at %s ... (targeting %s)",
+			listenInfo.forwardInfo.Src.String(), listenInfo.forwardInfo.Dst.String())
 		src, err := listenInfo.listener.Accept()
 		if err != nil {
 			log.Fatal().Err(err)
@@ -1700,26 +1575,26 @@ func ListenNewConnectSub(listenInfo ListenInfo, info *pipeInfo) {
 			}
 		}()
 
-		log.Printf("accepted connection")
+		log.Info().Str("role", role).Int("sessionId", sessionId).Msgf("new connection accepted")
 
-		citi := info.connInfo.SessionInfo.addCiti(src, CITIID_CTRL)
+		citi := pipeInfo.connInfo.SessionInfo.addCiti(role, src, CITIID_CTRL)
 		dst := listenInfo.forwardInfo.Dst
 
-		connInfo := info.connInfo
+		connInfo := pipeInfo.connInfo
 
 		var buffer bytes.Buffer
 		buffer.Write([]byte{CTRL_HEADER})
 		buf, _ := json.Marshal(&ConnHeader{dst, citi.citiId})
 		buffer.Write(buf)
 		connInfo.SessionInfo.packChan <- PackInfo{buffer.Bytes(), PACKET_KIND_NORMAL, CITIID_CTRL}
-		log.Printf("sessionId: %d, header sent", connInfo.SessionInfo.SessionId)
+		log.Info().Str("role", role).Int("sessionId", sessionId).Msgf("ctrl header sent to packetChan(%v), wait for response ...", connInfo.SessionInfo.packChan)
 
 		respHeader := <-citi.respHeader
 		if respHeader.Result {
-			go relaySession(info, citi, dst)
+			go relaySession(pipeInfo, citi, dst)
 			needClose = false
 		} else {
-			log.Printf("failed to connect %s:%s", dst.String(), respHeader.Mess)
+			log.Error().Str("role", role).Int("sessionId", sessionId).Msgf("failed to connect %s:%s", dst.String(), respHeader.Mess)
 		}
 	}
 
@@ -1728,130 +1603,100 @@ func ListenNewConnectSub(listenInfo ListenInfo, info *pipeInfo) {
 	}
 }
 
-// Tunnel 上に通すセッションを待ち受け & セッションの通信先と接続する
-//
+// ListenAndNewConnect waits for a session to pass through Tunnel & connect to the communication destination of the session
 // @param connInfo Tunnel
-// @param port 待ち受けるポート番号
-// @param parm トンネル情報
-// @param reconnect 再接続関数
-func ListenAndNewConnect(isClient bool, listenGroup *ListenGroup, localForwardList []ForwardInfo,
-	connInfo *ConnInfo, param *TunnelParam, reconnect func(sessionInfo *SessionInfo) *ConnInfo) {
+// @param port Listening port number
+// @param parm tunnel information
+// @param reconnect reconnection function
+func ListenAndNewConnect(isClient bool, listenGroup *ListenGroup, localForwardList []ForwardInfo, connInfo *ConnInfo, param *TunnelParam, reconnect func(sessionInfo *SessionInfo) *ConnInfo) {
 	ListenAndNewConnectWithDialer(isClient, listenGroup, localForwardList, connInfo, param, reconnect, func(dst string) (io.ReadWriteCloser, error) {
-		log.Printf("dial -- %s", dst)
+		log.Info().Msgf("dial %s", dst)
 		return net.Dial("tcp", dst)
 	})
 }
 
-func ListenAndNewConnectWithDialer(isClient bool, listenGroup *ListenGroup, localForwardList []ForwardInfo, connInfo *ConnInfo, param *TunnelParam,
-	reconnect func(sessionInfo *SessionInfo) *ConnInfo, dialer func(dst string) (io.ReadWriteCloser, error)) {
-	info := startRelaySession(connInfo, param.KeepAliveInterval, len(listenGroup.list) > 0, reconnect)
-
-	for _, listenInfo := range listenGroup.list {
-		go ListenNewConnectSub(listenInfo, info) // start each listening in the listenerGroup
+func ListenAndNewConnectWithDialer(isClient bool, listenGroup *ListenGroup, localForwards []ForwardInfo, connInfo *ConnInfo, param *TunnelParam, reconnect func(sessionInfo *SessionInfo) *ConnInfo, dialer func(dst string) (io.ReadWriteCloser, error)) {
+	role := "server"
+	if isClient {
+		role = "client"
 	}
 
-	if len(localForwardList) > 0 {
+	info := startRelaySession(role, connInfo, param.KeepAliveInterval, len(listenGroup.list) > 0, reconnect)
+
+	for _, listenInfo := range listenGroup.list {
+		go ListenNewConnectSub(role, listenInfo, info) // start each listening in the listenerGroup
+	}
+
+	log.Debug().Str("role", role).Msgf("local forwards: %v", localForwards)
+	if len(localForwards) > 0 {
 		for {
 			header := connInfo.SessionInfo.getHeader()
-
 			if header == nil {
 				break
 			}
-			go NewConnect(dialer, header, info)
+			go establishNewConnection(role, dialer, header, info)
 		}
+		log.Debug().Str("role", role).Msgf("local forwards ended")
 	}
+	log.Debug().Str("role", role).Msgf("listener group: %v", listenGroup.list)
 	if len(listenGroup.list) > 0 {
 		for {
-			log.Printf("wait releaseChan")
+			log.Debug().Str("role", role).Msgf("wait releaseChan")
 			if !<-connInfo.SessionInfo.releaseChan {
 				break
 			}
-			log.Printf("isClient -- %v", isClient)
+			log.Debug().Str("role", role).Msgf("client side: %t", isClient)
 			if !isClient {
 				break
 			}
 		}
+		log.Debug().Str("role", role).Msgf("local listeners ended")
 	}
-	log.Printf("disconnected")
+	log.Debug().Str("role", role).Msgf("disconnected")
 	connInfo.SessionInfo.SetState(Session_state_disconnected)
 }
 
-// Tunnel 上に通すセッションを待ち受け、開始されたセッションを処理する。
-//
-// @param connInfo Tunnel
-// @param port 待ち受けるポート番号
-// @param parm トンネル情報
-// @param reconnect 再接続関数
-//func ListenNewConnect(listenGroup *ListenGroup, connInfo *ConnInfo, param *TunnelParam, loop bool, reconnect func(sessionInfo *SessionInfo) *ConnInfo) {
-//	info := startRelaySession(connInfo, param.KeepAliveInterval, true, reconnect)
-//
-//	for _, listenInfo := range listenGroup.list {
-//		go ListenNewConnectSub(listenInfo, info)
-//	}
-//
-//	for {
-//		if !<-connInfo.SessionInfo.releaseChan {
-//			break
-//		}
-//		if !loop {
-//			break
-//		}
-//	}
-//	log.Printf("disconnected")
-//	connInfo.SessionInfo.SetState(Session_state_disconnected)
-//}
-
-func NewConnect(
-	dialer func(dst string) (io.ReadWriteCloser, error),
-	header *ConnHeader, info *pipeInfo) {
-	log.Print("header ", header)
-
-	dstAddr := header.HostInfo.String()
-	dst, err := dialer(dstAddr)
-	log.Printf("NewConnect -- %s", dstAddr)
+// establishNewConnection initiate a new tcp connection
+func establishNewConnection(role string, dialer func(dst string) (io.ReadWriteCloser, error), header *ConnHeader, info *PipeInfo) {
+	destAddr := header.HostInfo.String()
+	destConn, err := dialer(destAddr)
 
 	sessionInfo := info.connInfo.SessionInfo
+	sessionId := sessionInfo.SessionId
+	citi := sessionInfo.addCiti(role, destConn, header.CitiId)
 
-	citi := sessionInfo.addCiti(dst, header.CitiId)
+	{
+		// send CTRL_RESP_HEADER header
+		var buffer bytes.Buffer
+		buffer.Write([]byte{CTRL_RESP_HEADER})
+		resp := CtrlRespHeader{err == nil, fmt.Sprint(err), header.CitiId}
+		buf, _ := json.Marshal(&resp)
+		buffer.Write(buf)
+		sessionInfo.packChan <- PackInfo{buffer.Bytes(), PACKET_KIND_NORMAL, CITIID_CTRL}
+		log.Info().Str("role", role).Int("sessionId", sessionId).Msg("ctrl resp header pushed into packetChan")
 
-	// // pending
-	// time.Sleep(100 * time.Millisecond)
-
-	var buffer bytes.Buffer
-	buffer.Write([]byte{CTRL_RESP_HEADER})
-	resp := CtrlRespHeader{err == nil, fmt.Sprint(err), header.CitiId}
-	bytes, _ := json.Marshal(&resp)
-	buffer.Write(bytes)
-
-	sessionInfo.packChan <- PackInfo{
-		buffer.Bytes(), PACKET_KIND_NORMAL, CITIID_CTRL}
-	const Session_state_header = "respheader"
-
-	if err != nil {
-		log.Print("fained to connected to ", dstAddr)
-		return
+		if err != nil { // note this is the dialing error
+			log.Err(err).Str("role", role).Int("sessionId", sessionId).Msgf("fail to dial %s", destAddr)
+			return
+		}
 	}
-	defer dst.Close()
-
-	log.Print("connected to ", dstAddr)
+	defer func() { _ = destConn.Close() }()
+	log.Info().Str("role", role).Int("sessionId", sessionId).Msgf("connected to %s", destAddr)
 
 	relaySession(info, citi, header.HostInfo)
-
-	log.Print("closed")
+	log.Info().Str("role", role).Int("sessionId", sessionId).Msgf("connection to %s closed", destAddr)
 }
 
-func prepareClose(info *pipeInfo) {
+// sends a dummy(nil) header to avoid waiting
+func reverseTunnelPreCloseHook(info *PipeInfo) {
 	sessionInfo := info.connInfo.SessionInfo
 
-	log.Printf("prepareClose -- %t", sessionInfo.isTunnelServer)
-
+	log.Info().Msgf("sessionId: %d, pre close action, is reverse tunnel: %t", sessionInfo.SessionId, sessionInfo.isTunnelServer)
 	if sessionInfo.isTunnelServer {
 		for len(sessionInfo.ctrlInfo.waitHeaderCount) > 0 {
 			count := len(sessionInfo.ctrlInfo.waitHeaderCount)
-			log.Print("packetReader: put dummy header -- ", count)
 			for index := 0; index < count; index++ {
-				// connection 待ちで止まらないように ダミーを送信
-				sessionInfo.ctrlInfo.header <- nil
+				sessionInfo.ctrlInfo.header <- nil // send a dummy to avoid waiting for connection
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
