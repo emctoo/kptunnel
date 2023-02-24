@@ -15,6 +15,7 @@ import argparse
 from datetime import datetime
 import concurrent.futures
 import socket
+import socketserver
 
 # https://wiki.archlinux.org/title/Category:Eye_candy
 # https://wiki.archlinux.org/title/Color_output_in_console
@@ -60,6 +61,11 @@ logging.config.dictConfig({
             'class':'logging.StreamHandler',
             'formatter': 'echo'
         },
+        'echo_server_console': {
+            'level':'DEBUG',
+            'class':'logging.StreamHandler',
+            'formatter': 'echo_server'
+        },
         'wsc_console':{
             'level':'DEBUG',
             'class':'logging.StreamHandler',
@@ -88,6 +94,11 @@ logging.config.dictConfig({
     'loggers': {
         'echo': { 
             'handlers': ['console'],
+            'propagate': False,
+            'level': 'DEBUG',
+        },
+        'echo_server': {
+            'handlers': ['echo_server_console'],
             'propagate': False,
             'level': 'DEBUG',
         },
@@ -168,6 +179,35 @@ def launch_echo_server(port: int) -> subprocess.Popen:
     with subprocess.Popen(['socat', f'tcp-l:{port},reuseaddr,fork', 'exec:"/bin/cat"']) as p:
         log.info('echo service is ready')
 
+
+class MyTCPHandler(socketserver.BaseRequestHandler):
+    allow_reuse_address = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.count = 0
+
+    def handle(self):
+        log = logging.getLogger('echo_server')
+        server_prefix = '#SERVER#'
+        while True:
+            buf = self.request.recv(65535)
+            prefix = b'#CLIENT#'
+            if buf.startswith(prefix):
+                i = int.from_bytes(buf[len(prefix): len(prefix)+2], 'big')
+                log.info('client request, case %s', i)
+
+            if not buf:
+                log.info('received empty bytes, exit now')
+                break
+            log.info('received buf: %d, echo back', len(buf))
+            self.request.sendall(buf)
+
+def echo_server(port: int, host='localhost'):
+    log = logging.getLogger('echo_server')
+    with socketserver.TCPServer((host, port), MyTCPHandler) as server:
+        server.serve_forever()
+
 # TODO when max=65535, error happens
 def random_string(min=10, max=1024) -> string:
     return ''.join(random.choices(string.printable, k=random.randint(min, max)))
@@ -190,11 +230,13 @@ def echo_client(connections: int, rounds: int, ip='localhost', port=2022):
                     break
                     log.info('connected')
 
+            prefix = '#CLIENT#'.encode()
             for r in range(rounds):
-                sent_bytes = random_string().encode()
+                content = random_string().encode()
+                sent_bytes = prefix + (c * rounds + r).to_bytes(2, 'big') + len(content).to_bytes(2, 'big') + content
                 log.info('%s/%s sending buf %s bytes ...', c, r, len(sent_bytes))
                 sock.sendall(sent_bytes)
-                buf_received = sock.recv(1024) 
+                buf_received = sock.recv(65535)
                 correct = len(sent_bytes) == len(buf_received)
                 results.append((c, r, len(sent_bytes), len(buf_received), correct))
                 log.info('%s/%s received buf %s bytes, %s', c, r, len(buf_received), CHECK if correct else CROSS)
@@ -209,7 +251,8 @@ def test():
     with concurrent.futures.ProcessPoolExecutor() as executor:
         executor.submit(launch_wsc, server_host='127.0.0.1', server_port=1034, forward=':2022,127.0.0.1:2023')
         executor.submit(launch_wsd, server_host='127.0.0.1', server_port=1034)
-        executor.submit(launch_echo_server, port=2023)
+#         executor.submit(launch_echo_server, port=2023)
+        executor.submit(echo_server, port=2023)
         executor.submit(echo_client, connections=5, rounds=7)
         executor.submit(echo_client, connections=1, rounds=20, port=2022)
 

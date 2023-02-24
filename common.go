@@ -293,7 +293,7 @@ func (citiBuf *HeapCitiBuf) GetPacketBuf(citiId uint32, packSize uint16) []byte 
 
 // read packet from conn
 func readPacketFromConn(reader io.Reader, ctrl *CryptCtrl, workBuf []byte, citiBuf CitiBuf) (*Packet, error) {
-	var packetItem Packet
+	var packet Packet
 
 	// read kind, 1 byte
 	var kindBuf []byte
@@ -307,13 +307,13 @@ func readPacketFromConn(reader io.Reader, ctrl *CryptCtrl, workBuf []byte, citiB
 		return nil, err
 	}
 
-	switch packetItem.kind = int8(kindBuf[0]); packetItem.kind {
+	switch packet.kind = int8(kindBuf[0]); packet.kind {
 	case PACKET_KIND_DUMMY:
-		return &packetItem, nil
+		return &packet, nil
 	case PACKET_KIND_SYNC:
-		return ReadPackNo(reader, packetItem.kind)
+		return ReadPackNo(reader, packet.kind)
 	case PACKET_KIND_NORMAL:
-		if packetItem.tunnelStreamId, err = ReadTunnelStreamId(reader); err != nil {
+		if packet.tunnelStreamId, err = ReadTunnelStreamId(reader); err != nil {
 			return nil, err
 		}
 
@@ -339,7 +339,7 @@ func readPacketFromConn(reader io.Reader, ctrl *CryptCtrl, workBuf []byte, citiB
 			if len(workBuf) < int(packetSize) { // should be: 1 + 2 + packetSize bytes
 				log.Fatal().Msgf("packet buffer is less than expected, raw size: %d, expect: %d", len(workBuf), packetBuf)
 			}
-			citiPackBuf = citiBuf.GetPacketBuf(packetItem.tunnelStreamId, packetSize)
+			citiPackBuf = citiBuf.GetPacketBuf(packet.tunnelStreamId, packetSize)
 			if ctrl == nil || !ctrl.dec.IsValid() {
 				packetBuf = citiPackBuf // put citiPackBuf directly in packetBuf if packetNumber encryption
 			} else {
@@ -353,10 +353,10 @@ func readPacketFromConn(reader io.Reader, ctrl *CryptCtrl, workBuf []byte, citiB
 		if ctrl != nil {
 			packetBuf = ctrl.dec.Process(packetBuf, citiPackBuf)
 		}
-		packetItem.bytes = packetBuf
-		return &packetItem, nil
+		packet.bytes = packetBuf
+		return &packet, nil
 	default:
-		return nil, fmt.Errorf("illegal kind: %d", packetItem.kind)
+		return nil, fmt.Errorf("illegal kind: %d", packet.kind)
 	}
 }
 
