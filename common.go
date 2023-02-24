@@ -25,34 +25,25 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// 2byte の MAX。
-// ここを 65535 より大きくする場合は、WriteItem, ReadItem の処理を変更する。
 const BUFSIZE = 65535
 
-// 接続先情報
-type HostInfo struct {
-	// スキーム。 http:// など
+type Host struct {
 	Scheme string
-	// ホスト名
-	Name string
-	// ポート番号
-	Port int
-	// パス
-	Path string
-	// query
-	Query string
+	Name   string
+	Port   int
+	Path   string
+	Query  string
 }
 
-// 接続先の文字列表現
-func (info *HostInfo) String() string {
-	work := fmt.Sprintf("%s%s:%d%s", info.Scheme, info.Name, info.Port, info.Path)
+func (info *Host) String() string {
+	repr := fmt.Sprintf("%s%s:%d%s", info.Scheme, info.Name, info.Port, info.Path)
 	if info.Query != "" {
-		work = fmt.Sprintf("%s?%s", work, info.Query)
+		repr = fmt.Sprintf("%s?%s", repr, info.Query)
 	}
-	return work
+	return repr
 }
 
-func Hostname2HostInfo(name string) *HostInfo {
+func Hostname2HostInfo(name string) *Host {
 	if strings.Index(name, "://") == -1 {
 		name = fmt.Sprintf("http://%s", name)
 	}
@@ -72,7 +63,7 @@ func Hostname2HostInfo(name string) *HostInfo {
 		fmt.Printf("%s", err2)
 		return nil
 	}
-	return &HostInfo{"", hostport[0], port, serverUrl.Path, serverUrl.RawQuery}
+	return &Host{"", hostport[0], port, serverUrl.Path, serverUrl.RawQuery}
 }
 
 // パスワードからキーを生成する
@@ -167,9 +158,9 @@ func (mode *CryptMode) Process(inbuf []byte, outbuf []byte) []byte {
 			log.Print("crypto is disabled")
 		}
 	}
-	// buf := work[:len(inbuf)]
-	// mode.stream.XORKeyStream( buf, inbuf )
-	// return buf
+	// bytes := work[:len(inbuf)]
+	// mode.stream.XORKeyStream( bytes, inbuf )
+	// return bytes
 
 	mode.stream.XORKeyStream(work, inbuf)
 
@@ -188,131 +179,99 @@ func (ctrl *CryptCtrl) Decrypt(bytes []byte) []byte {
 
 const PACKET_KIND_NORMAL = 0 // normal packet
 const PACKET_KIND_DUMMY = 1  // dummy packet as heartbeat
-const PACKET_KIND_EOS = 2    // Packet for notifying the end of stream
+const PACKET_KIND_EOS = 2    // Packet for notifying the shouldEnd of stream
 const PACKET_KIND_SYNC = 3   // Packet for communication synchronization
 const PACKET_KIND_NORMAL_DIRECT = 4
 
-var dummyKindBuf = []byte{PACKET_KIND_DUMMY}
-var normalKindBuf = []byte{PACKET_KIND_NORMAL}
-var syncKindBuf = []byte{PACKET_KIND_SYNC}
+func getKindName(kind int8) string {
+	switch kind {
+	case PACKET_KIND_NORMAL:
+		return "normal"
+	case PACKET_KIND_DUMMY:
+		return "dummy"
+	case PACKET_KIND_EOS:
+		return "eos"
+	case PACKET_KIND_SYNC:
+		return "sync"
+	case PACKET_KIND_NORMAL_DIRECT:
+		return "normal-direct"
+	default:
+		return "unknown"
+	}
+}
+
+// DummyKindBuf and followings are all 1 byte length, and are initialized with constants
+var DummyKindBuf = []byte{PACKET_KIND_DUMMY}
+var NormalKindBuf = []byte{PACKET_KIND_NORMAL}
+var SyncKindBuf = []byte{PACKET_KIND_SYNC}
 
 var PACKET_LEN_HEADER int = 0
 
 func init() {
 	var citiId uint32
-	PACKET_LEN_HEADER = len(normalKindBuf) + int(unsafe.Sizeof(citiId))
+	PACKET_LEN_HEADER = len(NormalKindBuf) + int(unsafe.Sizeof(citiId))
 }
 
-func WriteDummy(ostream io.Writer) error {
-	if _, err := ostream.Write(dummyKindBuf); err != nil {
-		return err
-	}
-	return nil
-}
-
-func WriteSimpleKind(ostream io.Writer, kind int8, citiId uint32, buf []byte) error {
-
-	var kindbuf []byte
-	switch kind {
-	case PACKET_KIND_SYNC:
-		kindbuf = syncKindBuf
-	default:
-		log.Fatal().Msgf("illegal kind: %d", kind)
-	}
-
-	var buffer bytes.Buffer
-	buffer.Grow(PACKET_LEN_HEADER + len(buf))
-
-	if _, err := buffer.Write(kindbuf); err != nil {
-		return err
-	}
-	if err := binary.Write(&buffer, binary.BigEndian, citiId); err != nil {
-		return err
-	}
-	if _, err := buffer.Write(buf); err != nil {
-		return err
-	}
-
-	_, err := buffer.WriteTo(ostream)
-	return err
-}
-
-// データを出力する
-//
-// ostream 出力先
-// buf データ
-// ctrl 暗号化情報
-func WriteItem(
-	ostream io.Writer, citiId uint32,
-	buf []byte, ctrl *CryptCtrl, workBuf *bytes.Buffer) error {
-	// write のコール数が多いと通信効率が悪いので
-	// 一旦バッファに書き込んでから ostream に出力する。
-	var buffer *bytes.Buffer = workBuf
+func writeBytesAsNormalPacketWithBuffer(writer io.Writer, tunnelStreamId uint32, buf []byte, ctrl *CryptCtrl, inputBuffer *bytes.Buffer) error {
+	// If the number of write calls is large, the communication efficiency is poor.
+	// Write to buffer first and then output to stream.
+	var buffer = inputBuffer
 	if buffer == nil {
 		buffer = &bytes.Buffer{}
 	} else {
 		buffer.Reset()
 	}
 	size := uint16(len(buf))
-	buffer.Grow(
-		len(normalKindBuf) + int(unsafe.Sizeof(citiId)) +
-			int(unsafe.Sizeof(size)) + len(buf))
-
-	if err := WriteItemDirect(buffer, citiId, buf, ctrl); err != nil {
+	buffer.Grow(len(NormalKindBuf) + int(unsafe.Sizeof(tunnelStreamId)) + int(unsafe.Sizeof(size)) + len(buf))
+	if err := writeBytesAsNormalPacket(buffer, tunnelStreamId, buf, ctrl); err != nil {
 		return err
 	}
 
-	_, err := buffer.WriteTo(ostream)
+	_, err := buffer.WriteTo(writer)
 	return err
 }
 
-// データを出力する
-//
-// ostream 出力先
-// buf データ
-// ctrl 暗号化情報
-func WriteItemDirect(ostream io.Writer, citiId uint32, buf []byte, ctrl *CryptCtrl) error {
-	if _, err := ostream.Write(normalKindBuf); err != nil {
+func writeBytesAsNormalPacket(writer io.Writer, tunnelStreamId uint32, buf []byte, cryptCtrl *CryptCtrl) error {
+	// kind
+	if _, err := writer.Write(NormalKindBuf); err != nil {
 		return err
 	}
-	if err := binary.Write(ostream, binary.BigEndian, citiId); err != nil {
+	// tunnelStreamId
+	if err := binary.Write(writer, binary.BigEndian, tunnelStreamId); err != nil {
 		return err
 	}
-	if ctrl != nil {
-		buf = ctrl.enc.Process(buf, nil)
+
+	if cryptCtrl != nil { // encrypt the buffer
+		buf = cryptCtrl.enc.Process(buf, nil)
 	}
-	if err := binary.Write(ostream, binary.BigEndian, uint16(len(buf))); err != nil {
+	// bytes size
+	if err := binary.Write(writer, binary.BigEndian, uint16(len(buf))); err != nil {
 		return err
 	}
-	_, err := ostream.Write(buf)
+	// buffer
+	_, err := writer.Write(buf)
 	return err
 }
 
-type PackItem struct {
-	citiId uint32
-	buf    []byte
-	kind   int8
-}
-
-func ReadCitiId(istream io.Reader) (uint32, error) {
+func ReadTunnelStreamId(reader io.Reader) (uint32, error) {
 	buf := make([]byte, 4)
-	_, error := io.ReadFull(istream, buf)
-	if error != nil {
-		return 0, error
+	_, err := io.ReadFull(reader, buf)
+	if err != nil {
+		return 0, err
 	}
 	return binary.BigEndian.Uint32(buf), nil
 }
 
-func ReadPackNo(istream io.Reader, kind int8) (*PackItem, error) {
-	var item PackItem
+func ReadPackNo(reader io.Reader, kind int8) (*Packet, error) {
+	var item Packet
 	item.kind = kind
-	var error error
-	if item.citiId, error = ReadCitiId(istream); error != nil {
-		return nil, error
+	var err error
+	if item.tunnelStreamId, err = ReadTunnelStreamId(reader); err != nil {
+		return nil, err
 	}
 	var packNo int64
-	item.buf = make([]byte, unsafe.Sizeof(packNo))
-	_, err := io.ReadFull(istream, item.buf)
+	item.bytes = make([]byte, unsafe.Sizeof(packNo))
+	_, err = io.ReadFull(reader, item.bytes)
 	if err != nil {
 		return &item, err
 	}
@@ -320,12 +279,11 @@ func ReadPackNo(istream io.Reader, kind int8) (*PackItem, error) {
 }
 
 type CitiBuf interface {
-	// citiId 向けのバッファを取得する
+	// GetPacketBuf gets buffer for Id
 	GetPacketBuf(citiId uint32, packSize uint16) []byte
 }
 
-type HeapCitiBuf struct {
-}
+type HeapCitiBuf struct{}
 
 var heapCitiBuf *HeapCitiBuf = &HeapCitiBuf{}
 
@@ -333,103 +291,95 @@ func (citiBuf *HeapCitiBuf) GetPacketBuf(citiId uint32, packSize uint16) []byte 
 	return make([]byte, packSize)
 }
 
-// データを読み込む
-//
-// @param istream 読み込み元ストリーム
-// @param ctrl 暗号化制御
-// @param workBuf
-func ReadItem(
-	istream io.Reader, ctrl *CryptCtrl,
-	workBuf []byte, citiBuf CitiBuf) (*PackItem, error) {
+// read packet from conn
+func readPacketFromConn(reader io.Reader, ctrl *CryptCtrl, workBuf []byte, citiBuf CitiBuf) (*Packet, error) {
+	var packetItem Packet
 
-	var item PackItem
-
-	var kindbuf []byte
+	// read kind, 1 byte
+	var kindBuf []byte
 	if workBuf != nil {
-		kindbuf = workBuf[:1]
+		kindBuf = workBuf[:1]
 	} else {
-		kindbuf = make([]byte, 1)
+		kindBuf = make([]byte, 1)
 	}
-	_, error := io.ReadFull(istream, kindbuf)
-	if error != nil {
-		return nil, error
+	_, err := io.ReadFull(reader, kindBuf)
+	if err != nil {
+		return nil, err
 	}
-	switch item.kind = int8(kindbuf[0]); item.kind {
+
+	switch packetItem.kind = int8(kindBuf[0]); packetItem.kind {
 	case PACKET_KIND_DUMMY:
-		return &item, nil
+		return &packetItem, nil
 	case PACKET_KIND_SYNC:
-		return ReadPackNo(istream, item.kind)
+		return ReadPackNo(reader, packetItem.kind)
 	case PACKET_KIND_NORMAL:
-		if item.citiId, error = ReadCitiId(istream); error != nil {
-			return nil, error
-		}
-		var buf []byte
-		if workBuf != nil {
-			buf = workBuf[:2]
-		} else {
-			buf = make([]byte, 2)
+		if packetItem.tunnelStreamId, err = ReadTunnelStreamId(reader); err != nil {
+			return nil, err
 		}
 
-		//buf := make([]byte,2)
-		_, error := io.ReadFull(istream, buf)
-		if error != nil {
-			return nil, error
+		// read packet size, 2 bytes
+		var packetSizeBuf []byte
+		if workBuf != nil {
+			packetSizeBuf = workBuf[:2]
+		} else {
+			packetSizeBuf = make([]byte, 2)
 		}
-		packSize := binary.BigEndian.Uint16(buf)
-		var packBuf []byte
+
+		_, err := io.ReadFull(reader, packetSizeBuf)
+		if err != nil {
+			return nil, err
+		}
+		packetSize := binary.BigEndian.Uint16(packetSizeBuf)
+
+		var packetBuf []byte
 		var citiPackBuf []byte = nil
 		if workBuf == nil {
-			packBuf = make([]byte, packSize)
+			packetBuf = make([]byte, packetSize)
 		} else {
-			if len(workBuf) < int(packSize) {
-				log.Fatal().Msgf("workbuf size is short: %d", len(workBuf))
+			if len(workBuf) < int(packetSize) { // should be: 1 + 2 + packetSize bytes
+				log.Fatal().Msgf("packet buffer is less than expected, raw size: %d, expect: %d", len(workBuf), packetBuf)
 			}
-			citiPackBuf = citiBuf.GetPacketBuf(item.citiId, packSize)
+			citiPackBuf = citiBuf.GetPacketBuf(packetItem.tunnelStreamId, packetSize)
 			if ctrl == nil || !ctrl.dec.IsValid() {
-				// 暗号化無しなら packBuf に citiPackBuf を直接入れる
-				packBuf = citiPackBuf
+				packetBuf = citiPackBuf // put citiPackBuf directly in packetBuf if packetNumber encryption
 			} else {
-				// 暗号化ありなら packBuf に workBuf を設定して、
-				// 暗号化後のバッファを citiPackBuf に設定する
-				packBuf = workBuf[:packSize]
+				packetBuf = workBuf[:packetSize] // If encryption is enabled, set packetBuf to workBuf, set encrypted buffer to citiPackBuf
 			}
 		}
-		_, error = io.ReadFull(istream, packBuf)
-		if error != nil {
-			return nil, error
+		_, err = io.ReadFull(reader, packetBuf)
+		if err != nil {
+			return nil, err
 		}
 		if ctrl != nil {
-			packBuf = ctrl.dec.Process(packBuf, citiPackBuf)
+			packetBuf = ctrl.dec.Process(packetBuf, citiPackBuf)
 		}
-		item.buf = packBuf
-		return &item, nil
+		packetItem.bytes = packetBuf
+		return &packetItem, nil
 	default:
-		return nil, fmt.Errorf("ReadItem illegal kind -- %d", item.kind)
+		return nil, fmt.Errorf("illegal kind: %d", packetItem.kind)
 	}
 }
 
-// データを読み込む
-func readItemForNormal(istream io.Reader, ctrl *CryptCtrl) (*PackItem, error) {
-	item, err := ReadItem(istream, ctrl, nil, heapCitiBuf)
+func getNormalPacketOrError(reader io.Reader, ctrl *CryptCtrl) (*Packet, error) {
+	packetItem, err := readPacketFromConn(reader, ctrl, nil, heapCitiBuf)
 	if err != nil {
 		return nil, err
 	}
-	if item.kind != PACKET_KIND_NORMAL {
-		return nil, fmt.Errorf("readItemForNormal illegal kind -- %d", item.kind)
+	if packetItem.kind != PACKET_KIND_NORMAL {
+		return nil, fmt.Errorf("expect normal packet, get kind: %d", packetItem.kind)
 	}
-	return item, nil
+	return packetItem, nil
 }
 
-// データを読み込む
-func readItemWithReader(istream io.Reader, ctrl *CryptCtrl) (io.Reader, error) {
-	item, err := readItemForNormal(istream, ctrl)
+func getNormalPacketBufReaderOrError(reader io.Reader, ctrl *CryptCtrl) (io.Reader, error) {
+	packetItem, err := getNormalPacketOrError(reader, ctrl)
 	if err != nil {
 		return nil, err
 	}
-	if item.citiId != CITIID_CTRL {
-		return nil, fmt.Errorf("citiid != 0 -- %d", item.citiId)
+	if packetItem.tunnelStreamId != TUNNEL_STREAM_ID_CTRL {
+		return nil, fmt.Errorf("expect CIT CTRL, get %d", packetItem.tunnelStreamId)
 	}
-	return bytes.NewReader(item.buf), nil
+	return bytes.NewReader(packetItem.bytes), nil
 }
 
 // server -> client
@@ -454,7 +404,7 @@ type AuthResponse struct {
 	WriteNo      int64
 	ReadNo       int64
 	Ctrl         int
-	ForwardList  []ForwardInfo
+	ForwardList  []Forward
 }
 
 // server -> client
@@ -464,7 +414,7 @@ type AuthResult struct {
 	SessionToken string
 	WriteNo      int64
 	ReadNo       int64
-	ForwardList  []ForwardInfo
+	ForwardList  []Forward
 }
 
 func generateChallengeResponse(challenge string, pass *string, hint string) string {
@@ -472,17 +422,17 @@ func generateChallengeResponse(challenge string, pass *string, hint string) stri
 	return base64.StdEncoding.EncodeToString(sum[:])
 }
 
-// サーバ側のネゴシエーション処理
+// Server-side negotiation process
 //
-// 接続しに来たクライアントの認証を行なう。
+// Authenticate the isConnecting client.
 //
-// @param connInfo 接続コネクション情報
-// @param param Tunnel情報
-// @param remoteAddr 接続元のアドレス
-// @return bool 新しい session の場合 true
-// @return []ForwardInfo 接続する ForwardInfo リスト
+// @param transport connection information
+// @param param Tunnel information
+// @param remoteAddr Source address
+// @return bool true if new session
+// @return []Forward list of Forward to connect
 // @return error
-func ProcessServerAuth(connInfo *ConnInfo, param *TunnelParam, remoteAddr string, forwardList []ForwardInfo) (bool, []ForwardInfo, error) {
+func handleAuthOnServerSide(connInfo *Transport, param *TunnelParam, remoteAddr string, forwardList []Forward) (bool, []Forward, error) {
 	stream := connInfo.Conn
 	log.Print("start server auth")
 
@@ -493,44 +443,38 @@ func ProcessServerAuth(connInfo *ConnInfo, param *TunnelParam, remoteAddr string
 		return false, nil, err
 	}
 
-	// 共通文字列を暗号化して送信することで、
-	// 接続先の暗号パスワードが一致しているかチェック出来るようにデータ送信
-	WriteItem(stream, CITIID_CTRL, []byte(param.Magic), connInfo.CryptCtrlObj, nil)
+	_ = writeBytesAsNormalPacketWithBuffer(stream, TUNNEL_STREAM_ID_CTRL, param.Magic, connInfo.CryptCtrl, nil) // write magic
 
-	// challenge 文字列生成
 	nano := time.Now().UnixNano()
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%v", nano)))
 	str := base64.StdEncoding.EncodeToString(sum[:])
 	challenge := AuthChallenge{"1.00", str, param.Mode}
 
-	bytes, _ := json.Marshal(challenge)
-	if err := WriteItem(
-		stream, CITIID_CTRL, bytes, connInfo.CryptCtrlObj, nil); err != nil {
+	buf, _ := json.Marshal(challenge)
+	if err := writeBytesAsNormalPacketWithBuffer(stream, TUNNEL_STREAM_ID_CTRL, buf, connInfo.CryptCtrl, nil); err != nil { // write challenge
 		return false, nil, err
 	}
 	log.Print("challenge ", challenge.Challenge)
-	connInfo.SessionInfo.SetState(Session_state_authchallenge)
+	connInfo.Session.SetState(Session_state_authchallenge)
 
-	// challenge-response 処理
-	reader, err := readItemWithReader(stream, connInfo.CryptCtrlObj)
+	// challenge-response processing
+	reader, err := getNormalPacketBufReaderOrError(stream, connInfo.CryptCtrl)
 	if err != nil {
 		return false, nil, err
 	}
 	var resp AuthResponse
 	if err := json.NewDecoder(reader).Decode(&resp); err != nil {
-		log.Print("decode error -- AuthResponse")
+		log.Warn().Msgf("AuthResponse decoding error")
 		return false, nil, err
 	}
-	if resp.Response != generateChallengeResponse(
-		challenge.Challenge, param.Pass, resp.Hint) {
-		// challenge-response が不一致なので、認証失敗
-		bytes, _ := json.Marshal(AuthResult{"ng", 0, "", 0, 0, nil})
-		if err := WriteItem(
-			stream, CITIID_CTRL, bytes, connInfo.CryptCtrlObj, nil); err != nil {
+	if resp.Response != generateChallengeResponse(challenge.Challenge, param.Pass, resp.Hint) {
+		// authentication failed because challenge-response does not match
+		buf, _ := json.Marshal(AuthResult{"ng", 0, "", 0, 0, nil})
+		if err := writeBytesAsNormalPacketWithBuffer(stream, TUNNEL_STREAM_ID_CTRL, buf, connInfo.CryptCtrl, nil); err != nil { // write AuthResult failure
 			return false, nil, err
 		}
-		log.Print("mismatch password")
-		return false, nil, fmt.Errorf("mismatch password")
+		log.Print("password mismatches")
+		return false, nil, fmt.Errorf("password mismatches")
 	}
 
 	// ここまででクライアントの認証が成功したので、
@@ -541,76 +485,66 @@ func ProcessServerAuth(connInfo *ConnInfo, param *TunnelParam, remoteAddr string
 	newSession := false
 	if sessionToken == "" {
 		// sessionId が "" なら、新規セッション
-		connInfo.SessionInfo = NewSessionInfo(true)
+		connInfo.Session = NewSessionInfo(true)
 		newSession = true
 	} else {
 		if sessionInfo, has := GetSessionInfo(sessionToken); !has {
-			mess := fmt.Sprintf("not found session -- %s", sessionToken)
-			bytes, _ := json.Marshal(AuthResult{"ng: " + mess, 0, "", 0, 0, nil})
-			if err := WriteItem(
-				stream, CITIID_CTRL, bytes, connInfo.CryptCtrlObj, nil); err != nil {
+			errorMessage := fmt.Sprintf("session [%s] not found", sessionToken)
+			buf, _ := json.Marshal(AuthResult{Result: errorMessage})
+			if err := writeBytesAsNormalPacketWithBuffer(stream, TUNNEL_STREAM_ID_CTRL, buf, connInfo.CryptCtrl, nil); err != nil { // write AuthResult session not found error
 				return false, nil, err
 			}
-			return false, nil, fmt.Errorf(mess)
+			return false, nil, fmt.Errorf(errorMessage)
 		} else {
-			connInfo.SessionInfo = sessionInfo
-			WaitPauseSession(connInfo.SessionInfo)
+			connInfo.Session = sessionInfo
+			WaitPauseSession(connInfo.Session)
 		}
 	}
-	log.Printf(
-		"sessionId: %s, ReadNo: %d(%d), WriteNo: %d(%d)",
-		sessionToken, connInfo.SessionInfo.ReadNo, resp.WriteNo,
-		connInfo.SessionInfo.WriteNo, resp.ReadNo)
+	log.Printf("sessionId: %s, ReadNo: %d(%d), WriteNo: %d(%d)", sessionToken, connInfo.Session.ReadNo, resp.WriteNo, connInfo.Session.WriteNo, resp.ReadNo)
 
-	// AuthResult を返す
-	bytes, _ = json.Marshal(
-		AuthResult{
-			"ok", connInfo.SessionInfo.SessionId, connInfo.SessionInfo.SessionToken,
-			connInfo.SessionInfo.WriteNo, connInfo.SessionInfo.ReadNo, forwardList})
-	log.Printf("sent forwardList -- %v", forwardList)
-
+	// return AuthResult
+	buf, _ = json.Marshal(AuthResult{
+		Result:       "ok",
+		SessionId:    connInfo.Session.Id,
+		SessionToken: connInfo.Session.Token,
+		WriteNo:      connInfo.Session.WriteNo,
+		ReadNo:       connInfo.Session.ReadNo,
+		ForwardList:  forwardList,
+	})
+	log.Info().Msgf("forwards sent: %v", forwardList)
 	if len(forwardList) == 0 {
 		forwardList = resp.ForwardList
-		log.Printf("receive forwardList -- %v", resp.ForwardList)
+		log.Info().Msgf("forwards received: %v", resp.ForwardList)
 	}
-
-	if err := WriteItem(
-		stream, CITIID_CTRL, bytes, connInfo.CryptCtrlObj, nil); err != nil {
+	if err := writeBytesAsNormalPacketWithBuffer(stream, TUNNEL_STREAM_ID_CTRL, buf, connInfo.CryptCtrl, nil); err != nil { // write AuthResult
 		return false, nil, err
 	}
-	log.Print("match password")
-	connInfo.SessionInfo.SetState(Session_state_authresult)
+	log.Info().Msgf("password verified")
 
-	// データ再送のための設定
-	connInfo.SessionInfo.SetReWrite(resp.ReadNo)
+	connInfo.Session.SetState(Session_state_authresult)
+	connInfo.Session.SetReWrite(resp.ReadNo) // settings for resending data
 
 	if resp.Ctrl == CTRL_BENCH {
-		// ベンチマーク
 		benchBuf := make([]byte, 100)
 		for count := 0; count < BENCH_LOOP_COUNT; count++ {
-			if _, err := ReadItem(
-				stream, connInfo.CryptCtrlObj, benchBuf, heapCitiBuf); err != nil {
+			if _, err := readPacketFromConn(stream, connInfo.CryptCtrl, benchBuf, heapCitiBuf); err != nil {
 				return false, nil, err
 			}
-			if err := WriteItem(
-				stream, CITIID_CTRL, benchBuf, connInfo.CryptCtrlObj, nil); err != nil {
+			if err := writeBytesAsNormalPacketWithBuffer(stream, TUNNEL_STREAM_ID_CTRL, benchBuf, connInfo.CryptCtrl, nil); err != nil { // write benchmark buffer
 				return false, nil, err
 			}
 		}
-		return false, nil, fmt.Errorf("benchmarck")
+		return false, nil, fmt.Errorf("benchmarck is done")
 	}
+
 	if resp.Ctrl == CTRL_STOP {
-		log.Print("receive the stop request")
+		log.Info().Msgf("received the stop request, exit now")
 		os.Exit(0)
 	}
 
 	SetSessionConn(connInfo)
-	// if !newSession {
-	//     // 新規セッションでない場合、既にセッションが処理中なので、
-	//     // そのセッションでコネクションが close されるのを待つ
-	//     JoinUntilToCloseConn( stream )
-	// }
 
+	log.Info().Msgf("server auth completes")
 	return newSession, forwardList, nil
 }
 
@@ -619,7 +553,7 @@ func CorrectLackOffsetWrite(stream io.Writer) error {
 	// 最初のデータが欠けることがある。
 	// proxy サーバの影響か、 websocket の実装上の問題か？
 	// proxy サーバの問題な気がするが。。
-	// WriteItem() を使うと、データ長とデータがペアで送信されるが、
+	// writeBytesAsNormalPacketWithBuffer() を使うと、データ長とデータがペアで送信されるが、
 	// データが欠けることでデータ長とデータに不整合が発生し、
 	// 存在しないデータ長を読みこもうとして、タイムアウトするまで戻ってこない。
 	// そこで、最初のデータにどれだけズレがあるかを確認するための
@@ -671,15 +605,14 @@ func CorrectLackOffsetRead(stream io.Reader) error {
 	return nil
 }
 
-// サーバとのネゴシエーションを行なう
+// negotiate with the server
+// Exchanging necessary and procedures for client authentication and session information for reconnection
 //
-// クライアントの認証に必要や手続と、再接続時のセッション情報などをやり取りする
-//
-// @param connInfo コネクション。再接続時はセッション情報をセットしておく。
+// @param transport connection. Set the session information when reconnecting.
 // @param param TunnelParam
-// @return bool エラー時に、処理を継続するかどうか。true の場合継続する。
-// @return error エラー
-func ProcessClientAuth(connInfo *ConnInfo, param *TunnelParam, forwardList []ForwardInfo) ([]ForwardInfo, bool, error) {
+// @return bool Whether to continue processing on error. Continue if true.
+// @return error
+func handleAuthOnClientSide(connInfo *Transport, param *TunnelParam, forwardList []Forward) ([]Forward, bool, error) {
 	log.Printf("client starts auth ... (forwards: %v)", forwardList)
 
 	stream := connInfo.Conn
@@ -692,18 +625,18 @@ func ProcessClientAuth(connInfo *ConnInfo, param *TunnelParam, forwardList []For
 	}
 
 	log.Print("read Magic")
-	magicItem, err := readItemForNormal(stream, connInfo.CryptCtrlObj)
+	magicItem, err := getNormalPacketOrError(stream, connInfo.CryptCtrl)
 	if err != nil {
 		return nil, true, err
 	}
-	if !bytes.Equal(magicItem.buf, []byte(param.Magic)) {
-		return nil, true, fmt.Errorf("unmatch MAGIC %x", magicItem.buf)
+	if !bytes.Equal(magicItem.bytes, []byte(param.Magic)) {
+		return nil, true, fmt.Errorf("unmatch MAGIC %x", magicItem.bytes)
 	}
 	log.Print("read challenge")
 
 	// challenge を読み込み、認証用パスワードから response を生成する
 	var reader io.Reader
-	reader, err = readItemWithReader(stream, connInfo.CryptCtrlObj)
+	reader, err = getNormalPacketBufReaderOrError(stream, connInfo.CryptCtrl)
 	if err != nil {
 		return nil, true, err
 	}
@@ -732,22 +665,30 @@ func ProcessClientAuth(connInfo *ConnInfo, param *TunnelParam, forwardList []For
 		}
 	}
 
-	// response を生成
+	// generate auth response
 	nano := time.Now().UnixNano()
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%v", nano)))
 	hint := base64.StdEncoding.EncodeToString(sum[:])
 	resp := generateChallengeResponse(challenge.Challenge, param.Pass, hint)
-	bytes, _ := json.Marshal(AuthResponse{resp, hint, connInfo.SessionInfo.SessionToken, connInfo.SessionInfo.WriteNo, connInfo.SessionInfo.ReadNo, param.Ctrl, forwardList})
-	if err := WriteItem(stream, CITIID_CTRL, bytes, connInfo.CryptCtrlObj, nil); err != nil {
+	buf, _ := json.Marshal(AuthResponse{
+		Response:     resp,
+		Hint:         hint,
+		SessionToken: connInfo.Session.Token,
+		WriteNo:      connInfo.Session.WriteNo,
+		ReadNo:       connInfo.Session.ReadNo,
+		Ctrl:         param.Ctrl,
+		ForwardList:  forwardList,
+	})
+	if err := writeBytesAsNormalPacketWithBuffer(stream, TUNNEL_STREAM_ID_CTRL, buf, connInfo.CryptCtrl, nil); err != nil { // write AuthResponse
 		return nil, true, err
 	}
-	connInfo.SessionInfo.SetState(Session_state_authresponse)
+	connInfo.Session.SetState(Session_state_authresponse)
 
 	var result AuthResult
 	{
 		// AuthResult を取得する
 		log.Print("read auth result")
-		reader, err := readItemWithReader(stream, connInfo.CryptCtrlObj)
+		reader, err := getNormalPacketBufReaderOrError(stream, connInfo.CryptCtrl)
 		if err != nil {
 			return nil, true, err
 		}
@@ -793,14 +734,13 @@ func ProcessClientAuth(connInfo *ConnInfo, param *TunnelParam, forwardList []For
 		}
 
 		if param.Ctrl == CTRL_BENCH {
-			// ベンチマーク
 			benchBuf := make([]byte, 100)
 			prev := time.Now()
 			for count := 0; count < BENCH_LOOP_COUNT; count++ {
-				if err := WriteItem(stream, CITIID_CTRL, benchBuf, connInfo.CryptCtrlObj, nil); err != nil {
+				if err := writeBytesAsNormalPacketWithBuffer(stream, TUNNEL_STREAM_ID_CTRL, benchBuf, connInfo.CryptCtrl, nil); err != nil { // write benchmark buffer
 					return nil, false, err
 				}
-				if _, err := ReadItem(stream, connInfo.CryptCtrlObj, benchBuf, heapCitiBuf); err != nil {
+				if _, err := readPacketFromConn(stream, connInfo.CryptCtrl, benchBuf, heapCitiBuf); err != nil {
 					return nil, false, err
 				}
 			}
@@ -813,22 +753,21 @@ func ProcessClientAuth(connInfo *ConnInfo, param *TunnelParam, forwardList []For
 			os.Exit(0)
 		}
 
-		if result.SessionId != connInfo.SessionInfo.SessionId {
-			if connInfo.SessionInfo.SessionId == 0 {
+		if result.SessionId != connInfo.Session.Id {
+			if connInfo.Session.Id == 0 {
 				// 新規接続だった場合、セッション情報を更新する
-				//connInfo.SessionInfo.SessionId = result.SessionId
-				connInfo.SessionInfo.UpdateSessionId(result.SessionId, result.SessionToken)
+				//transport.Session.Id = result.Id
+				connInfo.Session.UpdateSessionId(result.SessionId, result.SessionToken)
 			} else {
 				return nil, false, fmt.Errorf("illegal sessionId -- %d, %d",
-					connInfo.SessionInfo.SessionId, result.SessionId)
+					connInfo.Session.Id, result.SessionId)
 			}
 		}
 
-		log.Printf("sessionId: %d, ReadNo: %d(%d), WriteNo: %d(%d)", result.SessionId, connInfo.SessionInfo.ReadNo, result.WriteNo,
-			connInfo.SessionInfo.WriteNo, result.ReadNo)
-		connInfo.SessionInfo.SetReWrite(result.ReadNo)
+		log.Printf("sessionId: %d, ReadNo: %d(%d), WriteNo: %d(%d)", result.SessionId, connInfo.Session.ReadNo, result.WriteNo, connInfo.Session.WriteNo, result.ReadNo)
+		connInfo.Session.SetReWrite(result.ReadNo)
 	}
 
-	log.Printf("client auth succeeds, forwards: %v", forwardList)
+	log.Printf("client auth completes")
 	return forwardList, true, nil
 }

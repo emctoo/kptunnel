@@ -127,9 +127,16 @@ def launch_wsd(server_host: string, server_port: int, debug=False, mode='wsserve
         for line in p.stdout:
             j = json.loads(line.strip())
             dt, level, caller, message, role, sessionId = (j.get(k) for k in ('time', 'level', 'caller', 'message', 'role', 'sessionId'))
-            filename, lineno = caller.split(':')
+            fn, filename, lineno = caller.split(':')
+#             if fn.startswith('github.com/emctoo/'):
+#                 fn = fn[len('github.com/emctoo/'):]
+#             if fn.startswith('kptunnel.'):
+#                 fn = fn[len('kptunnel.'):]
+#             if fn.startswith('main.'):
+#                 fn = fn[len('main.'):]
+            _, fn = fn.rsplit('.', 1)
             if debug:
-                log.info('%-30s %13s %-4s %-3s %s', dt, filename, lineno, sessionId or '-', message)
+                log.info('%-18s %13s %-4s %-32s %-3s %s', dt[11:], filename, lineno, fn, sessionId or '-', message)
 
 def launch_wsc(server_host, server_port, forward, debug=False, mode='wsclient'):
     log = logging.getLogger('wsc')
@@ -144,9 +151,16 @@ def launch_wsc(server_host, server_port, forward, debug=False, mode='wsclient'):
         for line in p.stdout:
             j = json.loads(line.strip())
             dt, level, caller, message, role, sessionId = (j.get(k) for k in ('time', 'level', 'caller', 'message', 'role', 'sessionId'))
-            filename, lineno = caller.split(':')
+            fn, filename, lineno = caller.split(':')
+#             if fn.startswith('github.com/emctoo/'):
+#                 fn = fn[len('github.com/emctoo/'):]
+#             if fn.startswith('kptunnel.'):
+#                 fn = fn[len('kptunnel.'):]
+#             if fn.startswith('main.'):
+#                 fn = fn[len('main.'):]
+            _, fn = fn.rsplit('.', 1)
             if debug:
-                log.info('%-30s %13s %-4s %-3s %s', dt, filename, lineno, sessionId or '-', message)
+                log.info('%-18s %13s %-4s %-32s %-3s %s', dt[11:], filename, lineno, fn, sessionId or '-', message)
 
 
 def launch_echo_server(port: int) -> subprocess.Popen:

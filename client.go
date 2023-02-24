@@ -16,7 +16,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func connectTunnel(serverInfo HostInfo, param *TunnelParam, forwardList []ForwardInfo) ([]ForwardInfo, ReconnectInfo) {
+func connectTunnel(serverInfo Host, param *TunnelParam, forwardList []Forward) ([]Forward, ReconnectInfo) {
 	log.Printf("start client --- %d", serverInfo.Port)
 	tunnel, err := net.Dial("tcp", fmt.Sprintf("%s:%d", serverInfo.Name, serverInfo.Port))
 	if err != nil {
@@ -27,9 +27,9 @@ func connectTunnel(serverInfo HostInfo, param *TunnelParam, forwardList []Forwar
 	connInfo := CreateConnInfo(tunnel, param.EncPass, param.EncCount, nil, false)
 	overrideForwardList := forwardList
 	cont := true
-	overrideForwardList, cont, err = ProcessClientAuth(connInfo, param, forwardList)
+	overrideForwardList, cont, err = handleAuthOnClientSide(connInfo, param, forwardList)
 	if err != nil {
-		connInfo.SessionInfo.SetState(Session_state_authmiss)
+		connInfo.Session.SetState(Session_state_authmiss)
 		log.Print(err)
 		tunnel.Close()
 		return nil, ReconnectInfo{nil, cont, err}
@@ -37,7 +37,7 @@ func connectTunnel(serverInfo HostInfo, param *TunnelParam, forwardList []Forwar
 	return overrideForwardList, ReconnectInfo{connInfo, true, err}
 }
 
-func StartClient(param *TunnelParam, forwardList []ForwardInfo) {
+func StartClient(param *TunnelParam, forwardList []Forward) {
 	process := func() bool {
 		sessionParam := *param
 		forwardList, reconnectInfo := connectTunnel(param.ServerInfo, &sessionParam, forwardList)
@@ -49,7 +49,7 @@ func StartClient(param *TunnelParam, forwardList []ForwardInfo) {
 		listenGroup, localForwardList := NewListen(true, forwardList)
 		defer listenGroup.Close()
 
-		reconnect := CreateToReconnectFunc(func(sessionInfo *SessionInfo) ReconnectInfo {
+		reconnect := CreateToReconnectFunc(func(sessionInfo *Session) ReconnectInfo {
 			_, reconnectInfo := connectTunnel(param.ServerInfo, &sessionParam, forwardList)
 			return reconnectInfo
 		})
@@ -76,7 +76,7 @@ func StartReverseClient(param *TunnelParam) {
 		listenGroup, localForwardList := NewListen(true, forwardList)
 		defer listenGroup.Close()
 
-		reconnect := CreateToReconnectFunc(func(sessionInfo *SessionInfo) ReconnectInfo {
+		reconnect := CreateToReconnectFunc(func(sessionInfo *Session) ReconnectInfo {
 			_, reconnectInfo := connectTunnel(param.ServerInfo, &sessionParam, nil)
 			return reconnectInfo
 		})
@@ -94,15 +94,15 @@ func StartReverseClient(param *TunnelParam) {
 type WebsocketClient struct {
 	UserAgent     string
 	TunnelConfig  *TunnelParam
-	ServerInfo    HostInfo
+	ServerInfo    Host
 	ProxyHost     string
-	Forwards      []ForwardInfo
+	Forwards      []Forward
 	ReconnectInfo ReconnectInfo
 	ListenerGroup *ListenGroup
 }
 
-func CreateWebsocketClient(serverInfo HostInfo, param *TunnelParam, forwardList []ForwardInfo, userAgent string, proxyHost string) (*WebsocketClient, error) {
-	log.Printf("before connecting, forwards: %v", forwardList)
+func CreateWebsocketClient(serverInfo Host, param *TunnelParam, forwardList []Forward, userAgent string, proxyHost string) (*WebsocketClient, error) {
+	log.Printf("before isConnecting, forwards: %v", forwardList)
 	forwardList, reconnectInfo := ConnectWebSocket(serverInfo.String(), proxyHost, userAgent, param, nil, forwardList)
 	if reconnectInfo.Err != nil {
 		log.Err(reconnectInfo.Err).Msgf("initial connection failed")
@@ -127,7 +127,7 @@ func (client *WebsocketClient) Start() {
 	}
 	reconnectUrl += "mode=Reconnect"
 
-	reconnect := CreateToReconnectFunc(func(sessionInfo *SessionInfo) ReconnectInfo {
+	reconnect := CreateToReconnectFunc(func(sessionInfo *Session) ReconnectInfo {
 		log.Info().Msgf("reconnect to %s ...", reconnectUrl)
 		_, reconnectInfo := ConnectWebSocket(reconnectUrl, client.ProxyHost, client.UserAgent, client.TunnelConfig, sessionInfo, client.Forwards)
 		return reconnectInfo
@@ -142,11 +142,11 @@ func (client *WebsocketClient) Stop() {
 	log.Printf("websocket client side exits.")
 }
 
-func StartWebSocketClient(userAgent string, param *TunnelParam, serverInfo HostInfo, proxyHost string, inputForwards []ForwardInfo) {
+func StartWebSocketClient(userAgent string, param *TunnelParam, serverInfo Host, proxyHost string, inputForwards []Forward) {
 	log.Printf("serverInfo: %#v", serverInfo)
 	sessionParam := *param
 	var reconnectInfo ReconnectInfo
-	var forwardList []ForwardInfo
+	var forwardList []Forward
 	for {
 		forwardList, reconnectInfo = ConnectWebSocket(serverInfo.String(), proxyHost, userAgent, &sessionParam, nil, inputForwards)
 		if reconnectInfo.Err == nil {
@@ -168,14 +168,14 @@ func StartWebSocketClient(userAgent string, param *TunnelParam, serverInfo HostI
 	}
 	reconnectUrl += "mode=Reconnect"
 
-	reconnect := CreateToReconnectFunc(func(sessionInfo *SessionInfo) ReconnectInfo {
+	reconnect := CreateToReconnectFunc(func(sessionInfo *Session) ReconnectInfo {
 		_, reconnectInfo := ConnectWebSocket(reconnectUrl, proxyHost, userAgent, &sessionParam, sessionInfo, forwardList)
 		return reconnectInfo
 	})
 	ListenAndNewConnect(true, listenGroup, localForwardList, reconnectInfo.Conn, &sessionParam, reconnect)
 }
 
-func StartReverseWebSocketClient(userAgent string, param *TunnelParam, serverInfo HostInfo, proxyHost string) {
+func StartReverseWebSocketClient(userAgent string, param *TunnelParam, serverInfo Host, proxyHost string) {
 	sessionParam := *param
 
 	reconnectUrl := serverInfo.String()
@@ -184,13 +184,13 @@ func StartReverseWebSocketClient(userAgent string, param *TunnelParam, serverInf
 	}
 	reconnectUrl += "mode=Reconnect"
 
-	reconnect := CreateToReconnectFunc(func(sessionInfo *SessionInfo) ReconnectInfo {
+	reconnect := CreateToReconnectFunc(func(sessionInfo *Session) ReconnectInfo {
 		_, reconnectInfo := ConnectWebSocket(reconnectUrl, proxyHost, userAgent, &sessionParam, sessionInfo, nil)
 		return reconnectInfo
 	})
 
 	process := func() {
-		forwardList, reconnectInfo := ConnectWebSocket(serverInfo.String(), proxyHost, userAgent, &sessionParam, nil, []ForwardInfo{})
+		forwardList, reconnectInfo := ConnectWebSocket(serverInfo.String(), proxyHost, userAgent, &sessionParam, nil, []Forward{})
 		if reconnectInfo.Err != nil {
 			return
 		}

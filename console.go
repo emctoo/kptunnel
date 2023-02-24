@@ -18,7 +18,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func StartConsole(hostInfo HostInfo) {
+func StartConsole(hostInfo Host) {
 	server := hostInfo.String()
 	log.Print("start console --- ", server)
 	local, err := net.Listen("tcp", server)
@@ -62,7 +62,7 @@ func startChat(args []string, scanner *bufio.Scanner, ostream io.Writer) bool {
 	return true
 }
 func printHelp(args []string, scanner *bufio.Scanner, ostream io.Writer) bool {
-	ostream.Write([]byte("command list:\n"))
+	ostream.Write([]byte("command listeners:\n"))
 	for _, cmd := range cmdList {
 		ostream.Write([]byte(fmt.Sprintf("  %s: %s\n", cmd.name, cmd.description)))
 	}

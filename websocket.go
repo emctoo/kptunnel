@@ -106,7 +106,7 @@ func (info *proxyInfo) Dial(network, addr string) (net.Conn, error) {
 }
 
 // ConnectWebSocket connects to the server
-func ConnectWebSocket(websocketUrl, proxyHost, userAgent string, param *TunnelParam, sessionInfo *SessionInfo, forwardList []ForwardInfo) ([]ForwardInfo, ReconnectInfo) {
+func ConnectWebSocket(websocketUrl, proxyHost, userAgent string, param *TunnelParam, sessionInfo *Session, forwardList []Forward) ([]Forward, ReconnectInfo) {
 	if param.Ctrl == CTRL_STOP {
 		workUrl, _ := url.Parse(websocketUrl)
 		if workUrl.RawQuery != "" {
@@ -161,15 +161,14 @@ func ConnectWebSocket(websocketUrl, proxyHost, userAgent string, param *TunnelPa
 	overrideForwardList := forwardList
 	cont := true
 	log.Printf("client is to auth, forwards: %v", forwardList)
-	overrideForwardList, cont, err = ProcessClientAuth(connInfo, param, forwardList)
+	overrideForwardList, cont, err = handleAuthOnClientSide(connInfo, param, forwardList)
 	if err != nil {
 		log.Err(err).Msg("client failed to auth")
-		connInfo.SessionInfo.SetState(Session_state_authmiss)
+		connInfo.Session.SetState(Session_state_authmiss)
 		_ = websock.Close()
 		return nil, ReconnectInfo{nil, cont, err}
 	}
 
-	log.Printf("local forwards %v, from remote forwards: %v", forwardList, overrideForwardList)
 	if overrideForwardList == nil || len(overrideForwardList) == 0 {
 		overrideForwardList = forwardList
 	}

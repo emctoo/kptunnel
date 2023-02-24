@@ -12,7 +12,7 @@ import (
 	"golang.org/x/net/websocket"
 )
 
-func processTcpServer(conn net.Conn, param *TunnelParam, forwardList []ForwardInfo, process func(*ConnInfo, *ListenGroup, []ForwardInfo)) {
+func processTcpServer(conn net.Conn, param *TunnelParam, forwardList []Forward, process func(*Transport, *ListenGroup, []Forward)) {
 	defer conn.Close()
 
 	remoteAddr := fmt.Sprintf("%s", conn.RemoteAddr())
@@ -28,11 +28,11 @@ func processTcpServer(conn net.Conn, param *TunnelParam, forwardList []ForwardIn
 	connInfo := CreateConnInfo(conn, tunnelParam.EncPass, tunnelParam.EncCount, nil, true)
 	//newSession := false
 	remoteAddrTxt := fmt.Sprintf("%s", conn.RemoteAddr())
-	var retForwardList []ForwardInfo
+	var retForwardList []Forward
 	var err error
-	if _, retForwardList, err = ProcessServerAuth(
+	if _, retForwardList, err = handleAuthOnServerSide(
 		connInfo, &tunnelParam, remoteAddrTxt, forwardList); err != nil {
-		connInfo.SessionInfo.SetState(Session_state_authmiss)
+		connInfo.Session.SetState(Session_state_authmiss)
 
 		log.Print("auth error: ", err)
 		time.Sleep(3 * time.Second)
@@ -46,8 +46,8 @@ func processTcpServer(conn net.Conn, param *TunnelParam, forwardList []ForwardIn
 }
 
 func listenTcpServer(
-	local net.Listener, param *TunnelParam, forwardList []ForwardInfo,
-	process func(*ConnInfo, *ListenGroup, []ForwardInfo)) {
+	local net.Listener, param *TunnelParam, forwardList []Forward,
+	process func(*Transport, *ListenGroup, []Forward)) {
 	conn, err := local.Accept()
 	if err != nil {
 		log.Fatal().Err(err)
@@ -56,7 +56,7 @@ func listenTcpServer(
 	go processTcpServer(conn, param, forwardList, process)
 }
 
-func StartServer(param *TunnelParam, forwardList []ForwardInfo) {
+func StartServer(param *TunnelParam, forwardList []Forward) {
 	log.Print("waiting --- ", param.ServerInfo.String())
 	local, err := net.Listen("tcp", param.ServerInfo.String())
 	if err != nil {
@@ -65,14 +65,14 @@ func StartServer(param *TunnelParam, forwardList []ForwardInfo) {
 	defer local.Close()
 
 	for {
-		listenTcpServer(local, param, forwardList, func(connInfo *ConnInfo,
-			listenGroup *ListenGroup, localForwardList []ForwardInfo) {
-			ListenAndNewConnect(false, listenGroup, localForwardList, connInfo, param, GetSessionConn)
+		listenTcpServer(local, param, forwardList, func(connInfo *Transport,
+			listenGroup *ListenGroup, localForwardList []Forward) {
+			ListenAndNewConnect(false, listenGroup, localForwardList, connInfo, param, getSessionTransport)
 		})
 	}
 }
 
-func StartReverseServer(param *TunnelParam, forwardList []ForwardInfo) {
+func StartReverseServer(param *TunnelParam, forwardList []Forward) {
 	log.Print("waiting reverse --- ", param.ServerInfo.String())
 	local, err := net.Listen("tcp", param.ServerInfo.String())
 	if err != nil {
@@ -81,8 +81,8 @@ func StartReverseServer(param *TunnelParam, forwardList []ForwardInfo) {
 	defer local.Close()
 
 	for {
-		listenTcpServer(local, param, forwardList, func(connInfo *ConnInfo, listenGroup *ListenGroup, localForwardList []ForwardInfo) {
-			ListenAndNewConnect(false, listenGroup, localForwardList, connInfo, param, GetSessionConn)
+		listenTcpServer(local, param, forwardList, func(connInfo *Transport, listenGroup *ListenGroup, localForwardList []Forward) {
+			ListenAndNewConnect(false, listenGroup, localForwardList, connInfo, param, getSessionTransport)
 		})
 	}
 }
@@ -128,14 +128,14 @@ func (s *WebSocketServer) Stop(ctx context.Context) {
 	_ = s.server.Shutdown(ctx)
 }
 
-func execWebSocketServer(param TunnelParam, forwardList []ForwardInfo, connectSession func(*ConnInfo, *TunnelParam, *ListenGroup, []ForwardInfo)) *http.Server {
+func execWebSocketServer(param TunnelParam, forwardList []Forward, connectSession func(*Transport, *TunnelParam, *ListenGroup, []Forward)) *http.Server {
 	handle := func(ws *websocket.Conn, remoteAddr string) {
 		ws.PayloadType = websocket.BinaryFrame // Set BinaryFrame because we are dealing with binary data
 
 		connInfo := CreateConnInfo(ws, param.EncPass, param.EncCount, nil, true)
-		_, retForwardList, err := ProcessServerAuth(connInfo, &param, remoteAddr, forwardList)
+		_, retForwardList, err := handleAuthOnServerSide(connInfo, &param, remoteAddr, forwardList)
 		if err != nil {
-			connInfo.SessionInfo.SetState(Session_state_authmiss)
+			connInfo.Session.SetState(Session_state_authmiss)
 			log.Err(err).Msgf("server auth process failed, retry in 1 second(s)")
 			time.Sleep(1 * time.Second)
 			return
@@ -155,15 +155,15 @@ func execWebSocketServer(param TunnelParam, forwardList []ForwardInfo, connectSe
 	//}
 }
 
-func StartWebsocketServer(param *TunnelParam, forwardList []ForwardInfo) *http.Server {
-	return execWebSocketServer(*param, forwardList, func(connInfo *ConnInfo, tunnelParam *TunnelParam, listenGroup *ListenGroup, localForwardList []ForwardInfo) {
-		ListenAndNewConnect(false, listenGroup, localForwardList, connInfo, tunnelParam, GetSessionConn)
+func StartWebsocketServer(param *TunnelParam, forwardList []Forward) *http.Server {
+	return execWebSocketServer(*param, forwardList, func(connInfo *Transport, tunnelParam *TunnelParam, listenGroup *ListenGroup, localForwardList []Forward) {
+		ListenAndNewConnect(false, listenGroup, localForwardList, connInfo, tunnelParam, getSessionTransport)
 	})
 }
 
 // StartReverseWebSocketServer create a websocket server
-func StartReverseWebSocketServer(param *TunnelParam, forwardList []ForwardInfo) *http.Server {
-	return execWebSocketServer(*param, forwardList, func(connInfo *ConnInfo, tunnelParam *TunnelParam, listenGroup *ListenGroup, localForwardList []ForwardInfo) {
-		ListenAndNewConnect(false, listenGroup, localForwardList, connInfo, tunnelParam, GetSessionConn)
+func StartReverseWebSocketServer(param *TunnelParam, forwardList []Forward) *http.Server {
+	return execWebSocketServer(*param, forwardList, func(connInfo *Transport, tunnelParam *TunnelParam, listenGroup *ListenGroup, localForwardList []Forward) {
+		ListenAndNewConnect(false, listenGroup, localForwardList, connInfo, tunnelParam, getSessionTransport)
 	})
 }

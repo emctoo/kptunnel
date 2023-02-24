@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -138,7 +139,7 @@ func makeEchoClientConnections(t *testing.T, serverAddr string) {
 	println("done")
 }
 
-func defaultTunnelConfig(serverAddr string, mode string, serverInfo *HostInfo) TunnelParam {
+func defaultTunnelConfig(serverAddr string, mode string, serverInfo *Host) TunnelParam {
 	pass := "42"
 	encPass := "42"
 	encCount := -1
@@ -146,15 +147,15 @@ func defaultTunnelConfig(serverAddr string, mode string, serverInfo *HostInfo) T
 	if serverInfo == nil {
 		serverInfo = Hostname2HostInfo(serverAddr)
 	}
-	// serverInfo := &HostInfo{Scheme: "ws://", Name: "127.0.0.1", Port: 1034, Path: "/"}
-	//serverInfo := &HostInfo{Scheme: "", Name: "", Port: 1034, Path: "", Query: ""}
+	// serverInfo := &Host{Scheme: "ws://", Name: "127.0.0.1", Port: 1034, Path: "/"}
+	//serverInfo := &Host{Scheme: "", Name: "", Port: 1034, Path: "", Query: ""}
 	return TunnelParam{Pass: &pass, Mode: mode, EncPass: &encPass, EncCount: encCount,
 		KeepAliveInterval: 20 * 1000, Magic: magic, ServerInfo: *serverInfo, WsReqHeader: http.Header{}}
 }
 
 func startWebsocketServer(t *testing.T, serverAddr string) *http.Server {
 	param := defaultTunnelConfig(serverAddr, "wsserver", nil)
-	server := StartWebsocketServer(&param, []ForwardInfo{})
+	server := StartWebsocketServer(&param, []Forward{})
 	go func() {
 		if err := server.ListenAndServe(); err != nil {
 			t.Error(err)
@@ -170,7 +171,7 @@ func TestStartWebsocketServer(t *testing.T) {
 	// server
 	// run client: ./wsc wsclient 127.0.0.1:1034 :2022,127.0.0.1:12023 -pass 42 -encPass 42
 	param := defaultTunnelConfig(":1035", "wsserver", nil)
-	server := StartWebsocketServer(&param, []ForwardInfo{})
+	server := StartWebsocketServer(&param, []Forward{})
 	go func() {
 		//println("listening ...")
 		_ = server.ListenAndServe()
@@ -181,14 +182,14 @@ func TestStartWebsocketServer(t *testing.T) {
 	// clients
 	// run server: ./wsd wsserver :1034 -pass 42 -encPass 42
 	//if false {
-	//	forwards := []ForwardInfo{
+	//	forwards := []Forward{
 	//		{
-	//			IsReverseTunnel: false,
-	//			Src:             HostInfo{Port: 2022},
-	//			Dst:             HostInfo{Name: "127.0.0.1", Port: 12023},
+	//			IsReverse: false,
+	//			Src:             Host{Port: 2022},
+	//			Dest:             Host{Name: "127.0.0.1", Port: 12023},
 	//		},
 	//	}
-	//	serverInfo := HostInfo{Scheme: "ws://", Name: "127.0.0.1", Port: 1034, Path: "/", Query: "session=fb018a73-2d8a-416f-bf5a-aea59aa6d4a9"}
+	//	serverInfo := Host{Scheme: "ws://", Name: "127.0.0.1", Port: 1034, Path: "/", Query: "session=fb018a73-2d8a-416f-bf5a-aea59aa6d4a9"}
 	//	clientTunnelConfig := defaultTunnelConfig("127.0.0.1:1034", "wsclient", &serverInfo)
 	//	client, _ := CreateWebsocketClient(serverInfo, &clientTunnelConfig, forwards, "", "")
 	//	go client.Start()
@@ -223,14 +224,14 @@ func TestStartWebsocketClient(t *testing.T) {
 	// clients
 	// run server: ./wsd wsserver :1034 -pass 42 -encPass 42
 	if true {
-		forwards := []ForwardInfo{
+		forwards := []Forward{
 			{
-				IsReverseTunnel: false,
-				Src:             HostInfo{Port: 2022},
-				Dst:             HostInfo{Name: "127.0.0.1", Port: 12023},
+				IsReverse: false,
+				Src:       Host{Port: 2022},
+				Dest:      Host{Name: "127.0.0.1", Port: 12023},
 			},
 		}
-		serverInfo := HostInfo{Scheme: "ws://", Name: "127.0.0.1", Port: 1034, Path: "/", Query: "session=fb018a73-2d8a-416f-bf5a-aea59aa6d4a9"}
+		serverInfo := Host{Scheme: "ws://", Name: "127.0.0.1", Port: 1034, Path: "/", Query: "session=fb018a73-2d8a-416f-bf5a-aea59aa6d4a9"}
 		clientTunnelConfig := defaultTunnelConfig("127.0.0.1:1034", "wsclient", &serverInfo)
 		client, _ := CreateWebsocketClient(serverInfo, &clientTunnelConfig, forwards, "", "")
 		go client.Start()
@@ -244,7 +245,7 @@ func init() {
 	// UNIX Time is faster and smaller than most timestamps
 	// zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	// zerolog.TimeFieldFormat = time.RFC3339Nano
-	zerolog.TimeFieldFormat = "2006-01-02T15:04:05.999Z07:00"
+	zerolog.TimeFieldFormat = "2006-01-02T15:04:05.999999Z07:00"
 
 	zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	// short filename:lineno format, instead of full path
@@ -257,7 +258,7 @@ func init() {
 			}
 		}
 		file = short
-		return file + ":" + strconv.Itoa(line)
+		return runtime.FuncForPC(pc).Name() + ":" + file + ":" + strconv.Itoa(line)
 	}
 	runLogFile, _ := os.OpenFile("/tmp/t.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0664)
 	multi := zerolog.MultiLevelWriter(os.Stdout, runLogFile)

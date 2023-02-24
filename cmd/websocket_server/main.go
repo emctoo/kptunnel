@@ -10,6 +10,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -37,15 +38,15 @@ func main() {
 			}
 		}
 		file = short
-		return file + ":" + strconv.Itoa(line)
+		return runtime.FuncForPC(pc).Name() + ":" + file + ":" + strconv.Itoa(line)
 	}
 	runLogFile, _ := os.OpenFile("/tmp/t.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0664)
 	multi := zerolog.MultiLevelWriter(os.Stdout, runLogFile)
 	log.Logger = zerolog.New(multi).With().Caller().Timestamp().Logger()
 
-	if kptunnel.BUFSIZE >= 65536 {
-		fmt.Printf("BUFSIZE is illegal. -- %d", 65536)
-	}
+	//if kptunnel.BUFSIZE >= 65536 {
+	//	fmt.Printf("BUFSIZE is illegal. -- %d", 65536)
+	//}
 
 	var cmd = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
 
@@ -91,7 +92,7 @@ func main() {
 	os.Exit(1)
 }
 
-func ParseOpt(cmd *flag.FlagSet, mode string, args []string) (*kptunnel.TunnelParam, []kptunnel.ForwardInfo, func()) {
+func ParseOpt(cmd *flag.FlagSet, mode string, args []string) (*kptunnel.TunnelParam, []kptunnel.Forward, func()) {
 	needForward := false
 	if mode == "r-server" || mode == "r-wsserver" || mode == "client" || mode == "wsclient" {
 		needForward = true
@@ -223,7 +224,7 @@ func ParseOpt(cmd *flag.FlagSet, mode string, args []string) (*kptunnel.TunnelPa
 		isReverseTunnel = true
 	}
 
-	forwardList := []kptunnel.ForwardInfo{}
+	forwardList := []kptunnel.Forward{}
 	for _, arg := range nonFlagArgs[1:] {
 		isReverseForward := isReverseTunnel
 		tokenList := strings.Split(arg, ",")
@@ -253,7 +254,7 @@ func ParseOpt(cmd *flag.FlagSet, mode string, args []string) (*kptunnel.TunnelPa
 			fmt.Printf("illegal forward. -- %s", arg)
 			usage()
 		}
-		forwardList = append(forwardList, kptunnel.ForwardInfo{IsReverseTunnel: isReverseForward, Src: *srcInfo, Dst: *remoteInfo})
+		forwardList = append(forwardList, kptunnel.Forward{IsReverse: isReverseForward, Src: *srcInfo, Dest: *remoteInfo})
 	}
 	if !*omitForward && len(forwardList) == 0 {
 		if mode == "r-server" || mode == "r-wsserver" || mode == "client" || mode == "wsclient" {
