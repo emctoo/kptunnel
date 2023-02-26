@@ -236,7 +236,7 @@ func writeBytesAsNormalPacket(writer io.Writer, tunnelStreamId uint32, buf []byt
 	if _, err := writer.Write(NormalKindBuf); err != nil {
 		return err
 	}
-	// tunnelStreamId
+	// streamId
 	if err := binary.Write(writer, binary.BigEndian, tunnelStreamId); err != nil {
 		return err
 	}
@@ -266,7 +266,7 @@ func ReadPackNo(reader io.Reader, kind int8) (*Packet, error) {
 	var item Packet
 	item.kind = kind
 	var err error
-	if item.tunnelStreamId, err = ReadTunnelStreamId(reader); err != nil {
+	if item.streamId, err = ReadTunnelStreamId(reader); err != nil {
 		return nil, err
 	}
 	var packNo int64
@@ -313,7 +313,7 @@ func readPacketFromConn(reader io.Reader, ctrl *CryptCtrl, workBuf []byte, citiB
 	case PACKET_KIND_SYNC:
 		return ReadPackNo(reader, packet.kind)
 	case PACKET_KIND_NORMAL:
-		if packet.tunnelStreamId, err = ReadTunnelStreamId(reader); err != nil {
+		if packet.streamId, err = ReadTunnelStreamId(reader); err != nil {
 			return nil, err
 		}
 
@@ -339,7 +339,7 @@ func readPacketFromConn(reader io.Reader, ctrl *CryptCtrl, workBuf []byte, citiB
 			if len(workBuf) < int(packetSize) { // should be: 1 + 2 + packetSize bytes
 				log.Fatal().Msgf("packet buffer is less than expected, raw size: %d, expect: %d", len(workBuf), packetBuf)
 			}
-			citiPackBuf = citiBuf.GetPacketBuf(packet.tunnelStreamId, packetSize)
+			citiPackBuf = citiBuf.GetPacketBuf(packet.streamId, packetSize)
 			if ctrl == nil || !ctrl.dec.IsValid() {
 				packetBuf = citiPackBuf // put citiPackBuf directly in packetBuf if packetNumber encryption
 			} else {
@@ -376,8 +376,8 @@ func getNormalPacketBufReaderOrError(reader io.Reader, ctrl *CryptCtrl) (io.Read
 	if err != nil {
 		return nil, err
 	}
-	if packetItem.tunnelStreamId != TUNNEL_STREAM_ID_CTRL {
-		return nil, fmt.Errorf("expect CIT CTRL, get %d", packetItem.tunnelStreamId)
+	if packetItem.streamId != TUNNEL_STREAM_ID_CTRL {
+		return nil, fmt.Errorf("expect CIT CTRL, get %d", packetItem.streamId)
 	}
 	return bytes.NewReader(packetItem.bytes), nil
 }

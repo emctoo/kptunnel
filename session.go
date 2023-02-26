@@ -160,23 +160,17 @@ type LocalStream struct {
 	conn      io.ReadWriteCloser
 	Id        uint32
 	bytesChan chan []byte //
-	end       bool
 
 	syncChan chan bool // channel for flow control
 
 	// to hold packets resent to WritePackList, Keep packet buffers in the link.
 
-	ringBufW  *RingBuf // Buffer for write.
-	ringBufR  *RingBuf // Buffer for read.
-	ReadNo    int64    // number of packets read in this session
-	WriteNo   int64    // number of packets written in this session
-	ReadSize  int64
-	WriteSize int64
+	ringBufW *RingBuf // Buffer for write.
+	ringBufR *RingBuf // Buffer for read.
+	ReadNo   int64    // number of packets read in this session
+	WriteNo  int64    // number of packets written in this session
 
 	ctrlRespChan chan *CtrlResponse
-
-	ReadState  int
-	WriteState int
 }
 
 func (ts *LocalStream) String() string {
@@ -230,9 +224,6 @@ type Session struct {
 
 	ringBufEnc  *RingBuf
 	encSyncChan chan bool
-
-	readState  int
-	writeState int
 
 	// Waiting for reconnect.
 	// 0: No waiting, 1: Wait with either Read or Write, 2: Read/Write
@@ -294,8 +285,6 @@ func newEmptySessionInfo(sessionId int, token string, isTunnelServer bool) *Sess
 		isTunnelServer:     isTunnelServer,
 		ringBufEnc:         NewRingBuf(PACKET_NUM, BUFSIZE),
 		encSyncChan:        make(chan bool, PACKET_NUM_DIV),
-		readState:          0,
-		writeState:         0,
 		reconnetWaitState:  0,
 		releaseChan:        make(chan bool, 3),
 		mutex:              &Lock{},
@@ -329,16 +318,10 @@ func DumpSession(stream io.Writer) {
 			stream, "writeSize, ReadSize: %d, %d\n",
 			sessionInfo.wroteSize, sessionInfo.readSize)
 		fmt.Fprintf(stream, "tunnelStreamMap: %d\n", len(sessionInfo.tunnelStreamMap))
-		fmt.Fprintf(
-			stream, "readState %d, writeState %d\n",
-			sessionInfo.readState, sessionInfo.writeState)
 
 		for _, citi := range sessionInfo.tunnelStreamMap {
 			fmt.Fprintf(stream, "======\n")
 			fmt.Fprintf(stream, "Id: %d-%d\n", sessionInfo.Id, citi.Id)
-			fmt.Fprintf(
-				stream, "readState %d, writeState %d\n",
-				citi.ReadState, citi.WriteState)
 			fmt.Fprintf(
 				stream, "syncChan: %d, bytesChan %d, readNo %d, writeNo %d\n",
 				len(citi.syncChan), len(citi.bytesChan), citi.ReadNo, citi.WriteNo)
@@ -381,17 +364,12 @@ func NewTunnelStream(conn io.ReadWriteCloser, citiId uint32) *LocalStream {
 		conn:         conn,
 		Id:           citiId,
 		bytesChan:    make(chan []byte, PACKET_NUM),
-		end:          false,
 		syncChan:     make(chan bool, PACKET_NUM_DIV),
 		ringBufW:     NewRingBuf(PACKET_NUM, BUFSIZE),
 		ringBufR:     NewRingBuf(PACKET_NUM, BUFSIZE),
 		ReadNo:       0,
 		WriteNo:      0,
-		ReadSize:     0,
-		WriteSize:    0,
 		ctrlRespChan: make(chan *CtrlResponse),
-		ReadState:    0,
-		WriteState:   0,
 	}
 	for count := 0; count < PACKET_NUM_DIV; count++ {
 		tunnelStream.syncChan <- true
@@ -430,7 +408,7 @@ func (session *Session) addTunnelStream(conn io.ReadWriteCloser, tunnelStreamId 
 	tunnelStream = NewTunnelStream(conn, tunnelStreamId)
 	session.tunnelStreamMap[tunnelStreamId] = tunnelStream
 	log.Info().Int("sessionId", session.Id).
-		Msgf("tunnelStream added, tunnelStreamId: %d, tunnelStream total: %d", tunnelStreamId, len(session.tunnelStreamMap))
+		Msgf("tunnelStream added, streamId: %d, tunnelStream total: %d", tunnelStreamId, len(session.tunnelStreamMap))
 	if len(session.tunnelStreamMap) > 0 {
 		for tsId, ts := range session.tunnelStreamMap {
 			log.Debug().Msgf("%d => %s", tsId, ts.String())
@@ -455,7 +433,7 @@ func (session *Session) delTunnelStream(localStream *LocalStream) {
 
 	delete(session.tunnelStreamMap, localStream.Id)
 	log.Info().Int("sessionId", session.Id).Uint32("localStreamId", localStream.Id).
-		Msgf("tunnelStreamId deleted, left total: %d", len(session.tunnelStreamMap))
+		Msgf("streamId deleted, left total: %d", len(session.tunnelStreamMap))
 
 	log.Info().Int("sessionId", session.Id).Uint32("localStreamId", localStream.Id).
 		Msgf("discard bytesChan, total: %d", len(localStream.bytesChan))
@@ -577,13 +555,20 @@ func (relay *Relay) sendRelease() {
 }
 
 type Packet struct {
-	kind           int8 // PACKET_KIND_*
-	tunnelStreamId uint32
-	bytes          []byte // write data
+	kind     int8 // PACKET_KIND_*
+	streamId uint32
+	bytes    []byte // write data
 }
 
 func (pkt *Packet) String() string {
-	return fmt.Sprintf("Packet(kind: %s, tunnelStreamId: %d, bytes: %d)", getKindName(pkt.kind), pkt.tunnelStreamId, len(pkt.bytes))
+	if pkt.kind == PACKET_KIND_SYNC && len(pkt.bytes) > 8 {
+		return fmt.Sprintf("Packet(kind: %s, seq: %d, streamId: %d, bytes: %d bytes/%p)",
+			getKindName(pkt.kind), int64(binary.BigEndian.Uint64(pkt.bytes)), pkt.streamId, len(pkt.bytes), pkt.bytes)
+	}
+	if pkt.kind == PACKET_KIND_NORMAL && pkt.streamId == TUNNEL_STREAM_ID_CTRL {
+		return fmt.Sprintf("Packet(kind: %s, streamId: %d/ctrl, bytes: %d bytes/%p)", getKindName(pkt.kind), pkt.streamId, len(pkt.bytes), pkt.bytes)
+	}
+	return fmt.Sprintf("Packet(kind: %s, streamId: %d, bytes: %d bytes/%p)", getKindName(pkt.kind), pkt.streamId, len(pkt.bytes), pkt.bytes)
 }
 
 // SessionPacket holds the data written in the session
@@ -611,7 +596,7 @@ func (session *Session) cacheWritePacket(packet *Packet) {
 // write data to connection, save the written data in WritePackList.
 func (t *Transport) writeNormalPacket(streamWriter io.Writer, tunnelStreamId uint32, bytes []byte) error {
 	return writeBytesAsNormalPacketWithBuffer(streamWriter, tunnelStreamId, bytes, t.CryptCtrl, nil) // TBD use &transport.WriteBuffer as the buffer
-	// return writeBytesAsNormalPacket(streamWriter, tunnelStreamId, bytes, transport.CryptCtrl)
+	// return writeBytesAsNormalPacket(streamWriter, streamId, bytes, transport.CryptCtrl)
 }
 
 func (t *Transport) writeNormalDirectPacket(streamWriter io.Writer, tunnelStreamId uint32, bytes []byte) error {
@@ -653,12 +638,9 @@ func (t *Transport) writeSyncPacket(writer io.Writer, tunnelStreamId uint32, buf
 }
 
 // read normal packet from conn
-func (t *Transport) readNormalPacketFromConn(work []byte) (*Packet, error) {
-	//var packetItem *PacketItem
-	//var err error
-
+func (t *Transport) readNormalPacket(work []byte) (*Packet, error) {
 	// read infinitely until a normal packet, or error happens
-	log.Info().Msgf("going into the loop of reading packets from conn ...")
+	log.Info().Msgf("going into the loop to read a normal packet ...")
 	for {
 		pkt, err := readPacketFromConn(t.Conn, t.CryptCtrl, work, t.Session)
 		if err != nil {
@@ -669,30 +651,27 @@ func (t *Transport) readNormalPacketFromConn(work []byte) (*Packet, error) {
 		// increase ReadNo, note: dummy pkt is actually not processed
 		if pkt.kind != PACKET_KIND_DUMMY {
 			t.Session.ReadNo++
-			log.Debug().Msgf("pkt read: %s, updated session ReadNo: %d", pkt.String(), t.Session.ReadNo)
+			log.Debug().Msgf("packet read, updated session ReadNo: %d", t.Session.ReadNo)
 		}
 
 		if pkt.kind == PACKET_KIND_SYNC {
-			log.Debug().Msgf("packetSeq: %d, get sync ", int64(binary.BigEndian.Uint64(pkt.bytes)))
+			log.Debug().Msgf("get sync packet, %s", pkt.String())
 
 			// Update syncChan when the other party receives it and set it to proceed with transmission processing.
-			if citi := t.Session.getTunnelStream(pkt.tunnelStreamId); citi != nil {
+			if citi := t.Session.getTunnelStream(pkt.streamId); citi != nil {
 				citi.syncChan <- true
-				log.Debug().Msgf("cit %d found, sync is put into syncChan", citi)
+				log.Debug().Msgf("stream %d found, sync is put into syncChan", citi)
 			} else {
-				log.Debug().Msgf("cit %d not found, discard sync pkt", pkt.tunnelStreamId)
+				log.Debug().Msgf("stream %d not found, discard sync pkt", pkt.streamId)
 			}
 		}
 
 		if pkt.kind == PACKET_KIND_NORMAL {
-			log.Info().Msgf("normal pkt read")
-			//break
+			log.Info().Msgf("normal pkt read, %s", pkt.String())
 			t.Session.readSize += int64(len(pkt.bytes))
 			return pkt, nil
 		}
 	}
-	//transport.Session.readSize += int64(len(packetItem.bytes))
-	//return packetItem, nil
 }
 
 // 再接続を行なう
@@ -753,7 +732,7 @@ func (relay *Relay) reconnect(txt string, rev int) (*Transport, int, bool) {
 		if len(sessionInfo.packetChan) == 0 {
 			// sessionInfo.packetChan 待ちで writeTunnelTransport が止まらないように
 			// dummy を投げる。
-			sessionInfo.packetChan <- Packet{kind: PACKET_KIND_DUMMY, tunnelStreamId: TUNNEL_STREAM_ID_CTRL}
+			sessionInfo.packetChan <- Packet{kind: PACKET_KIND_DUMMY, streamId: TUNNEL_STREAM_ID_CTRL}
 		}
 
 		if !relay.shouldEnd {
@@ -864,10 +843,7 @@ func (relay *Relay) getRevAndTransport() (int, *Transport) {
 // tunnel stream (bytesChan) => conn
 func writeLocalTransport(session *Session, localStream *LocalStream, exitChan chan<- bool) {
 	for {
-		localStream.ReadState = 10
-
 		readBuf := <-localStream.bytesChan
-		localStream.ReadState = 20
 
 		readSize := len(readBuf)
 		log.Debug().Msgf("read from bytes channel, readNo: %d, size: %d", localStream.ReadNo, readSize)
@@ -875,23 +851,17 @@ func writeLocalTransport(session *Session, localStream *LocalStream, exitChan ch
 		if (localStream.ReadNo % PACKET_NUM_BASE) == PACKET_NUM_BASE-1 { // send SYNC after reading a certain number
 			var buffer bytes.Buffer
 			_ = binary.Write(&buffer, binary.BigEndian, localStream.ReadNo)
-			localStream.ReadState = 30
-
-			session.packetChan <- Packet{bytes: buffer.Bytes(), kind: PACKET_KIND_SYNC, tunnelStreamId: localStream.Id} // push sync packet
+			session.packetChan <- Packet{bytes: buffer.Bytes(), kind: PACKET_KIND_SYNC, streamId: localStream.Id} // push sync packet
 			log.Info().Msg("sync sent to packet chan")
 		}
 		localStream.ReadNo++
-		localStream.ReadSize += int64(len(readBuf))
 
 		if readSize == 0 {
 			log.Warn().Msgf("read 0-size from bytes channel, exit")
 			break
 		}
-		localStream.ReadState = 40
 
 		_, writeErr := localStream.conn.Write(readBuf)
-		localStream.ReadState = 50
-
 		if writeErr != nil {
 			log.Err(writeErr).Msgf("conn writing failed, readNo: %d, exit", localStream.ReadNo)
 			break
@@ -964,40 +934,38 @@ func readLocalTransport(localStream *LocalStream, session *Session, exitChan cha
 	packetChan := session.packetChan
 
 	for {
-		localStream.WriteState = 10
 		if (localStream.WriteNo % PACKET_NUM_BASE) == 0 {
+			log.Debug().Msgf("WriteNo: %d, waiting for sync packet ...", localStream.WriteNo)
 			// In order to leave a buffer for retransmission when reconnecting after tunnel disconnection, get syncChan for every PACKET_NUM_BASE
 			// Don't send too much when the other party hasn't received it.
 			<-localStream.syncChan // TODO wait for sync signal, how is it triggered?
-			log.Debug().Int("sessionId", sessionId).Msgf("get sync packet")
+			log.Debug().Int("sessionId", sessionId).Msgf("sync packet captured")
 		}
 		localStream.WriteNo++
-		localStream.WriteState = 20
 
 		buf := localStream.ringBufW.getNext() // switch buffer
 		readSize, readErr := localStream.conn.Read(buf)
-		localStream.WriteState = 30
 
-		log.Debug().Int("sessionId", sessionId).Msgf("conn => tunnel stream, WriteNo: %d, readSize: %d", localStream.WriteNo, readSize)
+		log.Debug().Int("sessionId", sessionId).Msgf("bytes read, size: %d bytes, stream %d readNo: %d, WriteNo: %d, ",
+			readSize, localStream.Id, localStream.ReadNo, localStream.WriteNo)
 		if readErr != nil {
 			log.Err(readErr).Int("sessionId", sessionId).Msgf("conn bytes reading err, writeNo: %d", session.WriteNo)
-			packetChan <- Packet{bytes: make([]byte, 0), kind: PACKET_KIND_NORMAL, tunnelStreamId: localStream.Id} // write 0 bytes data to the destination when the input source is dead
+			packetChan <- Packet{bytes: make([]byte, 0), kind: PACKET_KIND_NORMAL, streamId: localStream.Id} // write 0 bytes data to the destination when the input source is dead
+			log.Info().Int("sessionId", sessionId).Msgf("0-size normal packet pushed to packetChan")
 			break
 		}
 		if readSize == 0 {
 			log.Warn().Int("sessionId", session.Id).Msg("ignore 0-size packet")
 			continue
 		}
-		localStream.WriteSize += int64(readSize)
-		localStream.WriteState = 40
 
 		if (localStream.WriteNo%PACKET_NUM_BASE) == 0 && len(localStream.syncChan) == 0 {
 			work := <-localStream.syncChan // if it's the last packet in the packet group and packetNumber SYNC is coming, wait for SYNC before sending
 			localStream.syncChan <- work   // Since we read ahead SYNC, we write back SYNC.
 		}
-		localStream.WriteState = 50
 
-		packetChan <- Packet{bytes: buf[:readSize], kind: PACKET_KIND_NORMAL, tunnelStreamId: localStream.Id}
+		packetChan <- Packet{bytes: buf[:readSize], kind: PACKET_KIND_NORMAL, streamId: localStream.Id}
+		log.Debug().Int("sessionId", sessionId).Msgf("normal packet pushed to packetChan")
 	}
 
 	exitChan <- true
@@ -1036,9 +1004,9 @@ func handleControlPacket(session *Session, payloadBuf []byte) {
 		}
 		if tunnelStream := session.getTunnelStream(resp.LocalStreamId); tunnelStream != nil {
 			tunnelStream.ctrlRespChan <- &resp
-			log.Info().Msgf("ctrl_resp pushed to LocalStream %d ctrlRespChan", tunnelStream.Id)
+			log.Info().Msgf("streamId: %d, ctrl_resp pushed to stream's ctrlRespChan", tunnelStream.Id)
 		} else {
-			log.Error().Msgf("LocalStream %d not found, ctrl_resp is discarded", resp.LocalStreamId)
+			log.Error().Msgf("stream %d not found, ctrl_resp is discarded", resp.LocalStreamId)
 		}
 	}
 }
@@ -1054,9 +1022,8 @@ func readTunnelTransport(relay *Relay) {
 		readSize := 0
 		var localStream *LocalStream
 		for {
-			session.readState = 10
-			if packet, err := tunnelTransport.readNormalPacketFromConn(buf); err != nil {
-				session.readState = 20
+			packet, err := tunnelTransport.readNormalPacket(buf)
+			if err != nil {
 				log.Err(err).Msgf("fail to read from tunnel transport, readNo: %d", session.ReadNo)
 
 				_ = tunnelTransport.Conn.Close()
@@ -1066,56 +1033,55 @@ func readTunnelTransport(relay *Relay) {
 				end := false
 				tunnelTransport, rev, end = relay.reconnect("read", rev)
 				if end {
-					log.Info().Msgf("reconnecting ends, ending now ...")
+					log.Info().Msgf("tunnel transport reconnecting ends, quit reading now ...")
 					readSize = 0
 					relay.shouldEnd = true
 					break
 				}
-			} else {
-				session.readState = 30
-				log.Debug().Msgf("read from conn, size: %d", len(packet.bytes))
+				continue
+			}
 
-				if packet.tunnelStreamId == TUNNEL_STREAM_ID_CTRL {
-					log.Debug().Msgf("LocalStream control packet")
-					handleControlPacket(session, packet.bytes)
-					readSize = 1 // set readSize to 1 so that the process doesn't shouldEnd
-				} else {
-					if localStream = session.getTunnelStream(packet.tunnelStreamId); localStream != nil {
-						// packet.bytes to localStream.bytesChan
-						// put in and processed in another thread.
-						// On the other hand, packet.bytes refers to a fixed address, so if you readNormalPacketFromConn before processing in another thread, the contents of packet.bytes will be overwritten.
-						// Copy to prevent that.
-
-						// cloneBuf := localStream.ringBufR.getNext()[:len(packet.bytes)]
-						// copy( cloneBuf, packet.bytes )
-						// localStream.ringBufR.getNext() // TODO comment out this?
-
-						cloneBuf := packet.bytes
-						localStream.bytesChan <- cloneBuf // TODO buffer is sent over channel, need to copy?
-						readSize = len(cloneBuf)
-					} else {
-						log.Info().Msgf("cit not found: %d, discard the packet", packet.tunnelStreamId)
-						readSize = 1
-					}
-				}
-				if readSize == 0 {
-					if packet.tunnelStreamId == TUNNEL_STREAM_ID_CTRL {
-						relay.shouldEnd = true
-					}
-				}
+			log.Debug().Msgf("packet read, readNo: %d, %s", session.ReadNo, packet.String())
+			if packet.streamId == TUNNEL_STREAM_ID_CTRL {
+				log.Debug().Msgf("control packet")
+				handleControlPacket(session, packet.bytes)
+				readSize = 1 // set readSize to 1 so that the process doesn't shouldEnd
 				break
 			}
+			localStream = session.getTunnelStream(packet.streamId)
+			if localStream == nil {
+				log.Info().Msgf("stream %d not found, discard the packet", packet.streamId)
+				readSize = 1
+			}
+
+			// packet.bytes to localStream.bytesChan
+			// put in and processed in another thread.
+			// On the other hand, packet.bytes refers to a fixed address, so if you readNormalPacket before processing in another thread, the contents of packet.bytes will be overwritten.
+			// Copy to prevent that.
+
+			// cloneBuf := localStream.ringBufR.getNext()[:len(packet.bytes)]
+			// copy( cloneBuf, packet.bytes )
+			// localStream.ringBufR.getNext() // TODO comment out this?
+
+			cloneBuf := packet.bytes
+			localStream.bytesChan <- cloneBuf // TODO buffer is sent over channel, need to copy?
+			readSize = len(cloneBuf)
+			log.Info().Msgf("%s sent to bytesChan", packet.String())
+
+			if readSize == 0 && packet.streamId == TUNNEL_STREAM_ID_CTRL {
+				relay.shouldEnd = true
+			}
+			break
 		}
 
-		session.readState = 40
 		if readSize == 0 {
-			log.Debug().Msgf("read size is 0")
+			log.Debug().Msgf("read buffer's size is 0")
 			if localStream != nil && len(localStream.syncChan) == 0 {
 				localStream.syncChan <- true // when exiting, readLocalTransport() may be waiting, notify syncChan here
 			}
-			session.readState = 50
 
 			if relay.shouldEnd { // stream ends or read 0-size buffer
+				log.Debug().Msgf("should end")
 				relay.sendRelease()
 				for _, workCiti := range session.tunnelStreamMap { // shouldEnd all tunnel streams
 					if len(workCiti.syncChan) == 0 {
@@ -1188,12 +1154,12 @@ func writePacketToWriter(pkt *Packet, writer io.Writer, transport *Transport, ne
 		log.Debug().Int("sessionId", sessionId).Msgf("eos")
 		return false, nil
 	case PACKET_KIND_SYNC:
-		writeErr = transport.writeSyncPacket(writer, pkt.tunnelStreamId, pkt.bytes)
+		writeErr = transport.writeSyncPacket(writer, pkt.streamId, pkt.bytes)
 		log.Debug().Int("sessionId", sessionId).Msgf("sync sent")
 	case PACKET_KIND_NORMAL:
-		writeErr = transport.writeNormalPacket(writer, pkt.tunnelStreamId, pkt.bytes)
+		writeErr = transport.writeNormalPacket(writer, pkt.streamId, pkt.bytes)
 	case PACKET_KIND_NORMAL_DIRECT:
-		writeErr = transport.writeNormalDirectPacket(writer, pkt.tunnelStreamId, pkt.bytes)
+		writeErr = transport.writeNormalDirectPacket(writer, pkt.streamId, pkt.bytes)
 	case PACKET_KIND_DUMMY:
 		writeErr = transport.writeDummyPacket(writer)
 		needToCache = false
@@ -1223,10 +1189,10 @@ func writeTunnelTransport(relay *Relay) {
 
 collectAndWriteLoop:
 	for {
-		session.writeState = 10
+		log.Debug().Int("sessionId", sessionId).Msgf("waiting for packet from packetChan ...")
 		packet := <-packetChan
+		log.Debug().Int("sessionId", sessionId).Msgf("got packet from packetChan, %s", packet.String())
 
-		session.writeState = 20
 		buffer.Reset()
 		// TODO buffer the first packet into `buffer`, so we can remove the last one-packet writing call
 
@@ -1236,7 +1202,7 @@ collectAndWriteLoop:
 				break // cannot hold more, have to send now
 			}
 
-			sentPkt := Packet{bytes: packet.bytes, kind: PACKET_KIND_NORMAL_DIRECT, tunnelStreamId: packet.tunnelStreamId}
+			sentPkt := Packet{bytes: packet.bytes, kind: PACKET_KIND_NORMAL_DIRECT, streamId: packet.streamId}
 			streamContinues, err := writePacketToWriter(&sentPkt, &buffer, connInfoRev.transport, true) // bytes written to buffer
 			if err != nil {
 				log.Fatal().Int("sessionId", sessionId).Err(err).Msgf("fail to write to conn")
@@ -1248,7 +1214,6 @@ collectAndWriteLoop:
 			packet = <-packetChan // read more
 		}
 
-		session.writeState = 30
 		if buffer.Len() != 0 {
 			log.Debug().Int("sessionId", sessionId).Msgf("write buffered packets, size: %d ...", buffer.Len())
 			if _, err := connInfoRev.transport.Conn.Write(buffer.Bytes()); err != nil { // use transport to write bytes
@@ -1263,9 +1228,9 @@ collectAndWriteLoop:
 			}
 		}
 
-		session.writeState = 40
 		// in case packet is not buffer into `buffer`
 		// TODO try to remove this call
+		log.Debug().Int("sessionId", sessionId).Msgf("one packet / no buffer write, %s", packet.String())
 		if !writePacketToTransportWithRetry(relay, &packet, &connInfoRev) { // write one packet
 			break
 		}
@@ -1333,7 +1298,7 @@ func keepalive(session *Session, relay *Relay, interval int) {
 			}
 		}
 		if !relay.isConnecting {
-			session.packetChan <- Packet{kind: PACKET_KIND_DUMMY, tunnelStreamId: TUNNEL_STREAM_ID_CTRL}
+			session.packetChan <- Packet{kind: PACKET_KIND_DUMMY, streamId: TUNNEL_STREAM_ID_CTRL}
 		}
 	}
 	log.Info().Int("sessionId", session.Id).Msgf("keepalive routine exits")
@@ -1556,7 +1521,7 @@ func establishNewConnection(dialer func(dst string) (io.ReadWriteCloser, error),
 		resp := CtrlResponse{Success: err == nil, Message: fmt.Sprint(err), LocalStreamId: header.LocalStreamId}
 		buf, _ := json.Marshal(&resp)
 		buffer.Write(buf)
-		session.packetChan <- Packet{bytes: buffer.Bytes(), kind: PACKET_KIND_NORMAL, tunnelStreamId: TUNNEL_STREAM_ID_CTRL} // ctrl_resp pushed
+		session.packetChan <- Packet{bytes: buffer.Bytes(), kind: PACKET_KIND_NORMAL, streamId: TUNNEL_STREAM_ID_CTRL} // ctrl_resp pushed
 		log.Info().Int("sessionId", sessionId).Msg("ctrl resp ctrlRequestChan pushed into packetChan")
 
 		if err != nil { // note this is the dialing error
@@ -1601,7 +1566,7 @@ func acceptAndRelay(listener RelayListener, relay *Relay) {
 		buffer.Write([]byte{CTRL_REQ_NEW_CONNECTION})
 		buf, _ := json.Marshal(&CtrlRequest{Host: dest, LocalStreamId: tunnelStream.Id})
 		buffer.Write(buf)
-		transport.Session.packetChan <- Packet{bytes: buffer.Bytes(), kind: PACKET_KIND_NORMAL, tunnelStreamId: TUNNEL_STREAM_ID_CTRL} // accept a new connection, push ctrl_req_header to notify the other party
+		transport.Session.packetChan <- Packet{bytes: buffer.Bytes(), kind: PACKET_KIND_NORMAL, streamId: TUNNEL_STREAM_ID_CTRL} // accept a new connection, push ctrl_req_header to notify the other party
 		log.Info().Int("sessionId", sessionId).Msgf("ctrl_req pushed to packetChan(%v), waiting ctrl_resp ...", transport.Session.packetChan)
 	}
 

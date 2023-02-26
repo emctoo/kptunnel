@@ -129,6 +129,7 @@ def launch_wsd(server_host: string, server_port: int, debug=False, mode='wsserve
     log.info('%s WSD %s %s', '-' * 20, datetime.now().isoformat(), '-' * 20)
     dump_watchexec_envs(log)
 
+    log.info('rm wsc, %s', subprocess.run(['rm', 'wsc']))
     subprocess.run(['go', 'build', '-o', 'wsd', 'cmd/websocket_server/main.go'])
     log.info('wsd compiled')
 
@@ -153,6 +154,7 @@ def launch_wsc(server_host, server_port, forward, debug=False, mode='wsclient'):
     log = logging.getLogger('wsc')
     log.info('%s WSC %s %s', '-' * 20, datetime.now().isoformat(), '-' * 20)
 
+    subprocess.run(['rm', 'wsc'])
     subprocess.run(['go', 'build', '-o', 'wsc', 'cmd/websocket_client/main.go'])
     log.info('wsc compiled')
 
