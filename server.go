@@ -12,7 +12,7 @@ import (
 	"golang.org/x/net/websocket"
 )
 
-func processTcpServer(conn net.Conn, param *TunnelParam, forwardList []Forward, process func(*Transport, *ListenGroup, []Forward)) {
+func processTcpServer(conn net.Conn, param *TunnelParam, forwardList []Forward, process func(*Transport, *ListenerGroup, []Forward)) {
 	defer conn.Close()
 
 	remoteAddr := fmt.Sprintf("%s", conn.RemoteAddr())
@@ -47,7 +47,7 @@ func processTcpServer(conn net.Conn, param *TunnelParam, forwardList []Forward, 
 
 func listenTcpServer(
 	local net.Listener, param *TunnelParam, forwardList []Forward,
-	process func(*Transport, *ListenGroup, []Forward)) {
+	process func(*Transport, *ListenerGroup, []Forward)) {
 	conn, err := local.Accept()
 	if err != nil {
 		log.Fatal().Err(err)
@@ -66,7 +66,7 @@ func StartServer(param *TunnelParam, forwardList []Forward) {
 
 	for {
 		listenTcpServer(local, param, forwardList, func(connInfo *Transport,
-			listenGroup *ListenGroup, localForwardList []Forward) {
+			listenGroup *ListenerGroup, localForwardList []Forward) {
 			ListenAndNewConnect(false, listenGroup, localForwardList, connInfo, param, getSessionTransport)
 		})
 	}
@@ -81,7 +81,7 @@ func StartReverseServer(param *TunnelParam, forwardList []Forward) {
 	defer local.Close()
 
 	for {
-		listenTcpServer(local, param, forwardList, func(connInfo *Transport, listenGroup *ListenGroup, localForwardList []Forward) {
+		listenTcpServer(local, param, forwardList, func(connInfo *Transport, listenGroup *ListenerGroup, localForwardList []Forward) {
 			ListenAndNewConnect(false, listenGroup, localForwardList, connInfo, param, getSessionTransport)
 		})
 	}
@@ -128,7 +128,7 @@ func (s *WebSocketServer) Stop(ctx context.Context) {
 	_ = s.server.Shutdown(ctx)
 }
 
-func execWebSocketServer(param TunnelParam, forwardList []Forward, connectSession func(*Transport, *TunnelParam, *ListenGroup, []Forward)) *http.Server {
+func execWebSocketServer(param TunnelParam, forwardList []Forward, connectSession func(*Transport, *TunnelParam, *ListenerGroup, []Forward)) *http.Server {
 	handle := func(ws *websocket.Conn, remoteAddr string) {
 		ws.PayloadType = websocket.BinaryFrame // Set BinaryFrame because we are dealing with binary data
 
@@ -156,14 +156,14 @@ func execWebSocketServer(param TunnelParam, forwardList []Forward, connectSessio
 }
 
 func StartWebsocketServer(param *TunnelParam, forwardList []Forward) *http.Server {
-	return execWebSocketServer(*param, forwardList, func(connInfo *Transport, tunnelParam *TunnelParam, listenGroup *ListenGroup, localForwardList []Forward) {
+	return execWebSocketServer(*param, forwardList, func(connInfo *Transport, tunnelParam *TunnelParam, listenGroup *ListenerGroup, localForwardList []Forward) {
 		ListenAndNewConnect(false, listenGroup, localForwardList, connInfo, tunnelParam, getSessionTransport)
 	})
 }
 
 // StartReverseWebSocketServer create a websocket server
 func StartReverseWebSocketServer(param *TunnelParam, forwardList []Forward) *http.Server {
-	return execWebSocketServer(*param, forwardList, func(connInfo *Transport, tunnelParam *TunnelParam, listenGroup *ListenGroup, localForwardList []Forward) {
+	return execWebSocketServer(*param, forwardList, func(connInfo *Transport, tunnelParam *TunnelParam, listenGroup *ListenerGroup, localForwardList []Forward) {
 		ListenAndNewConnect(false, listenGroup, localForwardList, connInfo, tunnelParam, getSessionTransport)
 	})
 }

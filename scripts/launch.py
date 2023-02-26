@@ -147,7 +147,7 @@ def launch_wsd(server_host: string, server_port: int, debug=False, mode='wsserve
 #                 fn = fn[len('main.'):]
             _, fn = fn.rsplit('.', 1)
             if debug:
-                log.info('%-18s %13s %-4s %-32s %-3s %s', dt[11:], filename, lineno, fn, sessionId or '-', message)
+                log.info('%-21s %13s %-4s %-32s %-3s %s', dt[11:], filename, lineno, fn, sessionId or '-', message)
 
 def launch_wsc(server_host, server_port, forward, debug=False, mode='wsclient'):
     log = logging.getLogger('wsc')
@@ -171,7 +171,7 @@ def launch_wsc(server_host, server_port, forward, debug=False, mode='wsclient'):
 #                 fn = fn[len('main.'):]
             _, fn = fn.rsplit('.', 1)
             if debug:
-                log.info('%-18s %13s %-4s %-32s %-3s %s', dt[11:], filename, lineno, fn, sessionId or '-', message)
+                log.info('%-21s %13s %-4s %-32s %-3s %s', dt[11:], filename, lineno, fn, sessionId or '-', message)
 
 
 def launch_echo_server(port: int) -> subprocess.Popen:
@@ -246,6 +246,12 @@ def echo_client(connections: int, rounds: int, ip='localhost', port=2022):
         log.info(f'{COLOR_BEGIN}{COLOR_RED}c=%s r=%s{COLOR_END} {CROSS}', connections, rounds)
     else:
         log.info(f'{COLOR_BEGIN}{COLOR_GREEN}c=%s r=%s{COLOR_END} {CHECK}', connections, rounds)
+
+
+# TODO tcp random client and server, with selector module
+# https://docs.python.org/zh-cn/3/library/selectors.html
+# https://docs.python.org/3/library/socketserver.html
+# https://mathspp.com/blog/til/022
 
 def test():
     with concurrent.futures.ProcessPoolExecutor() as executor:

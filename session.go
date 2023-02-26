@@ -39,10 +39,6 @@ var VerboseFlag = false
 
 var DebugFlag = false
 
-func IsDebug() bool {
-	return DebugFlag
-}
-
 type Forward struct {
 	IsReverse bool
 	Src       Host
@@ -145,13 +141,13 @@ func (ringBuf *RingBuf) getCur() []byte {
 }
 
 type CtrlRequest struct {
-	Host           Host
-	TunnelStreamId uint32
+	Host          Host
+	LocalStreamId uint32
 }
 type CtrlResponse struct {
-	Success        bool
-	TunnelStreamId uint32
-	Message        string
+	Success       bool
+	LocalStreamId uint32
+	Message       string
 }
 
 type Ctrl struct {
@@ -159,7 +155,8 @@ type Ctrl struct {
 	ctrlRequestChan      chan *CtrlRequest
 }
 
-type TunnelStream struct {
+// LocalStream wraps local connection, accepted or initiated
+type LocalStream struct {
 	conn      io.ReadWriteCloser
 	Id        uint32
 	bytesChan chan []byte //
@@ -176,16 +173,14 @@ type TunnelStream struct {
 	ReadSize  int64
 	WriteSize int64
 
-	ctrlRespHeaderChan chan *CtrlResponse
+	ctrlRespChan chan *CtrlResponse
 
 	ReadState  int
 	WriteState int
-
-	waitTimeInfo WaitTimeInfo
 }
 
-func (ts *TunnelStream) String() string {
-	return fmt.Sprintf("TunnelStream(id: %d, syncChan len: %d, rxSeq: %d, tx: %d)",
+func (ts *LocalStream) String() string {
+	return fmt.Sprintf("LocalStream(id: %d, syncChan len: %d, rxSeq: %d, tx: %d)",
 		ts.Id, len(ts.syncChan), ts.ReadNo, ts.WriteNo)
 }
 
@@ -216,7 +211,7 @@ type Session struct {
 	readSize  int64 // Size read from pipe
 	wroteSize int64 // Size written in pipe
 
-	tunnelStreamMap    map[uint32]*TunnelStream
+	tunnelStreamMap    map[uint32]*LocalStream
 	nextTunnelStreamId uint32
 
 	ReadNo  int64 // Number of packets READ in this session
@@ -235,8 +230,6 @@ type Session struct {
 
 	ringBufEnc  *RingBuf
 	encSyncChan chan bool
-
-	packetWriterWaitTime time.Duration
 
 	readState  int
 	writeState int
@@ -275,7 +268,7 @@ func (session *Session) Setup() {
 
 	session.ctrl.waitRequestCountChan = make(chan int, 100)
 	session.ctrl.ctrlRequestChan = make(chan *CtrlRequest, 1)
-	//sessionInfo.ctrl.ctrlRespHeaderChan = make(chan *CtrlResponse,1)
+	//sessionInfo.ctrl.ctrlRespChan = make(chan *CtrlResponse,1)
 
 	for count := 0; count < PACKET_NUM_DIV; count++ {
 		session.encSyncChan <- true
@@ -284,29 +277,28 @@ func (session *Session) Setup() {
 
 func newEmptySessionInfo(sessionId int, token string, isTunnelServer bool) *Session {
 	sessionInfo := &Session{
-		Id:                   sessionId,
-		Token:                token,
-		packetChan:           make(chan Packet, PACKET_NUM),
-		packetEncChan:        make(chan Packet, PACKET_NUM),
-		readSize:             0,
-		wroteSize:            0,
-		tunnelStreamMap:      map[uint32]*TunnelStream{},
-		nextTunnelStreamId:   TUNNEL_STREAM_ID_USR,
-		ReadNo:               0,
-		WriteNo:              0,
-		WritePackList:        new(list.List),
-		RewriteNo:            -1,
-		ctrl:                 Ctrl{},
-		state:                "None",
-		isTunnelServer:       isTunnelServer,
-		ringBufEnc:           NewRingBuf(PACKET_NUM, BUFSIZE),
-		encSyncChan:          make(chan bool, PACKET_NUM_DIV),
-		packetWriterWaitTime: 0,
-		readState:            0,
-		writeState:           0,
-		reconnetWaitState:    0,
-		releaseChan:          make(chan bool, 3),
-		mutex:                &Lock{},
+		Id:                 sessionId,
+		Token:              token,
+		packetChan:         make(chan Packet, PACKET_NUM),
+		packetEncChan:      make(chan Packet, PACKET_NUM),
+		readSize:           0,
+		wroteSize:          0,
+		tunnelStreamMap:    map[uint32]*LocalStream{},
+		nextTunnelStreamId: TUNNEL_STREAM_ID_USR,
+		ReadNo:             0,
+		WriteNo:            0,
+		WritePackList:      new(list.List),
+		RewriteNo:          -1,
+		ctrl:               Ctrl{},
+		state:              "None",
+		isTunnelServer:     isTunnelServer,
+		ringBufEnc:         NewRingBuf(PACKET_NUM, BUFSIZE),
+		encSyncChan:        make(chan bool, PACKET_NUM_DIV),
+		readState:          0,
+		writeState:         0,
+		reconnetWaitState:  0,
+		releaseChan:        make(chan bool, 3),
+		mutex:              &Lock{},
 	}
 
 	sessionInfo.Setup()
@@ -384,23 +376,22 @@ func (session *Session) UpdateSessionId(sessionId int, token string) {
 	sessionMgr.sessionsByToken[session.Token] = session
 }
 
-func NewTunnelStream(conn io.ReadWriteCloser, citiId uint32) *TunnelStream {
-	tunnelStream := &TunnelStream{
-		conn:               conn,
-		Id:                 citiId,
-		bytesChan:          make(chan []byte, PACKET_NUM),
-		end:                false,
-		syncChan:           make(chan bool, PACKET_NUM_DIV),
-		ringBufW:           NewRingBuf(PACKET_NUM, BUFSIZE),
-		ringBufR:           NewRingBuf(PACKET_NUM, BUFSIZE),
-		ReadNo:             0,
-		WriteNo:            0,
-		ReadSize:           0,
-		WriteSize:          0,
-		ctrlRespHeaderChan: make(chan *CtrlResponse),
-		ReadState:          0,
-		WriteState:         0,
-		waitTimeInfo:       WaitTimeInfo{},
+func NewTunnelStream(conn io.ReadWriteCloser, citiId uint32) *LocalStream {
+	tunnelStream := &LocalStream{
+		conn:         conn,
+		Id:           citiId,
+		bytesChan:    make(chan []byte, PACKET_NUM),
+		end:          false,
+		syncChan:     make(chan bool, PACKET_NUM_DIV),
+		ringBufW:     NewRingBuf(PACKET_NUM, BUFSIZE),
+		ringBufR:     NewRingBuf(PACKET_NUM, BUFSIZE),
+		ReadNo:       0,
+		WriteNo:      0,
+		ReadSize:     0,
+		WriteSize:    0,
+		ctrlRespChan: make(chan *CtrlResponse),
+		ReadState:    0,
+		WriteState:   0,
 	}
 	for count := 0; count < PACKET_NUM_DIV; count++ {
 		tunnelStream.syncChan <- true
@@ -408,7 +399,7 @@ func NewTunnelStream(conn io.ReadWriteCloser, citiId uint32) *TunnelStream {
 	return tunnelStream
 }
 
-func (session *Session) getCtrlReqHeader() *CtrlRequest {
+func (session *Session) getCtrlRequest() *CtrlRequest {
 	ctrl := session.ctrl
 
 	ctrl.waitRequestCountChan <- 0
@@ -418,7 +409,7 @@ func (session *Session) getCtrlReqHeader() *CtrlRequest {
 	return header
 }
 
-func (session *Session) addTunnelStream(role string, conn io.ReadWriteCloser, tunnelStreamId uint32) *TunnelStream {
+func (session *Session) addTunnelStream(conn io.ReadWriteCloser, tunnelStreamId uint32) *LocalStream {
 	sessionMgr.mutex.get("addTunnelStream")
 	defer sessionMgr.mutex.rel()
 
@@ -426,19 +417,20 @@ func (session *Session) addTunnelStream(role string, conn io.ReadWriteCloser, tu
 		tunnelStreamId = session.nextTunnelStreamId
 		session.nextTunnelStreamId++
 		if session.nextTunnelStreamId <= TUNNEL_STREAM_ID_USR {
-			log.Fatal().Str("role", role).Msg("tunnelStream id overflows")
+			log.Fatal().Msg("tunnelStream id overflows")
 		}
 	}
 
 	tunnelStream, exists := session.tunnelStreamMap[tunnelStreamId]
 	if exists {
-		log.Info().Str("role", role).Int("sessionId", session.Id).Msgf("tsId %d exists", tunnelStreamId)
+		log.Info().Int("sessionId", session.Id).Msgf("tsId %d exists", tunnelStreamId)
 		return tunnelStream
 	}
 
 	tunnelStream = NewTunnelStream(conn, tunnelStreamId)
 	session.tunnelStreamMap[tunnelStreamId] = tunnelStream
-	log.Info().Str("role", role).Int("sessionId", session.Id).Msgf("tunnelStream added, tunnelStreamId: %d, tunnelStream total: %d", tunnelStreamId, len(session.tunnelStreamMap))
+	log.Info().Int("sessionId", session.Id).
+		Msgf("tunnelStream added, tunnelStreamId: %d, tunnelStream total: %d", tunnelStreamId, len(session.tunnelStreamMap))
 	if len(session.tunnelStreamMap) > 0 {
 		for tsId, ts := range session.tunnelStreamMap {
 			log.Debug().Msgf("%d => %s", tsId, ts.String())
@@ -447,7 +439,7 @@ func (session *Session) addTunnelStream(role string, conn io.ReadWriteCloser, tu
 	return tunnelStream
 }
 
-func (session *Session) getTunnelStream(tunnelStreamId uint32) *TunnelStream {
+func (session *Session) getTunnelStream(tunnelStreamId uint32) *LocalStream {
 	sessionMgr.mutex.get("getTunnelStream")
 	defer sessionMgr.mutex.rel()
 
@@ -457,16 +449,18 @@ func (session *Session) getTunnelStream(tunnelStreamId uint32) *TunnelStream {
 	return nil
 }
 
-func (session *Session) delTunnelStream(tunnelStream *TunnelStream) {
+func (session *Session) delTunnelStream(localStream *LocalStream) {
 	sessionMgr.mutex.get("delTunnelStream")
 	defer sessionMgr.mutex.rel()
 
-	delete(session.tunnelStreamMap, tunnelStream.Id)
-	log.Info().Int("sessionId", session.Id).Uint32("tunnelStreamId", tunnelStream.Id).Msgf("tunnelStreamId deleted, left total: %d", len(session.tunnelStreamMap))
+	delete(session.tunnelStreamMap, localStream.Id)
+	log.Info().Int("sessionId", session.Id).Uint32("localStreamId", localStream.Id).
+		Msgf("tunnelStreamId deleted, left total: %d", len(session.tunnelStreamMap))
 
-	log.Info().Int("sessionId", session.Id).Uint32("tunnelStreamId", tunnelStream.Id).Msgf("discard bytesChan, total: %d", len(tunnelStream.bytesChan))
-	for len(tunnelStream.bytesChan) > 0 {
-		<-tunnelStream.bytesChan
+	log.Info().Int("sessionId", session.Id).Uint32("localStreamId", localStream.Id).
+		Msgf("discard bytesChan, total: %d", len(localStream.bytesChan))
+	for len(localStream.bytesChan) > 0 {
+		<-localStream.bytesChan
 	}
 }
 
@@ -521,16 +515,13 @@ type SessionManager struct {
 	sessionsByToken map[string]*Session
 	transportMap    map[int]*Transport
 	relayMap        map[int]*Relay
-	//conn2alive        map[io.ReadWriteCloser]bool // A map to determine if sessions on the connection are enabled.
-
-	mutex Lock // mutex when accessing values in the SessionManager
+	mutex           Lock // mutex when accessing values in the SessionManager
 }
 
 var sessionMgr = SessionManager{
 	sessionsByToken: map[string]*Session{},
 	transportMap:    map[int]*Transport{},
 	relayMap:        map[int]*Relay{},
-	//conn2alive:        map[io.ReadWriteCloser]bool{},
 }
 
 // 指定のコネクションをセッション管理に登録する
@@ -760,7 +751,7 @@ func (relay *Relay) reconnect(txt string, rev int) (*Transport, int, bool) {
 		reverseTunnelPreCloseHook(relay)
 
 		if len(sessionInfo.packetChan) == 0 {
-			// sessionInfo.packetChan 待ちで packetWriter が止まらないように
+			// sessionInfo.packetChan 待ちで writeTunnelTransport が止まらないように
 			// dummy を投げる。
 			sessionInfo.packetChan <- Packet{kind: PACKET_KIND_DUMMY, tunnelStreamId: TUNNEL_STREAM_ID_CTRL}
 		}
@@ -871,50 +862,45 @@ func (relay *Relay) getRevAndTransport() (int, *Transport) {
 }
 
 // tunnel stream (bytesChan) => conn
-func tunnel2Stream(sessionInfo *Session, tunnelStream *TunnelStream, exitChan chan<- bool) {
+func writeLocalTransport(session *Session, localStream *LocalStream, exitChan chan<- bool) {
 	for {
-		tunnelStream.ReadState = 10
+		localStream.ReadState = 10
 
-		timeStart := time.Now()
-		readBuf := <-tunnelStream.bytesChan
-		tunnelStream.ReadState = 20
+		readBuf := <-localStream.bytesChan
+		localStream.ReadState = 20
 
-		waitingTime := time.Now().Sub(timeStart)
-		tunnelStream.waitTimeInfo.tunnel2Stream += waitingTime
-		if waitingTime > 5*time.Millisecond {
-			log.Debug().Msgf("wait bytes channel, readNo: %d, cost: %s", tunnelStream.ReadNo, waitingTime)
-		}
 		readSize := len(readBuf)
-		log.Debug().Msgf("read from bytes channel, readNo: %d, size: %d", tunnelStream.ReadNo, readSize)
+		log.Debug().Msgf("read from bytes channel, readNo: %d, size: %d", localStream.ReadNo, readSize)
 
-		if (tunnelStream.ReadNo % PACKET_NUM_BASE) == PACKET_NUM_BASE-1 { // send SYNC after reading a certain number
+		if (localStream.ReadNo % PACKET_NUM_BASE) == PACKET_NUM_BASE-1 { // send SYNC after reading a certain number
 			var buffer bytes.Buffer
-			_ = binary.Write(&buffer, binary.BigEndian, tunnelStream.ReadNo)
-			tunnelStream.ReadState = 30
+			_ = binary.Write(&buffer, binary.BigEndian, localStream.ReadNo)
+			localStream.ReadState = 30
 
-			sessionInfo.packetChan <- Packet{bytes: buffer.Bytes(), kind: PACKET_KIND_SYNC, tunnelStreamId: tunnelStream.Id} // push sync packet
+			session.packetChan <- Packet{bytes: buffer.Bytes(), kind: PACKET_KIND_SYNC, tunnelStreamId: localStream.Id} // push sync packet
 			log.Info().Msg("sync sent to packet chan")
 		}
-		tunnelStream.ReadNo++
-		tunnelStream.ReadSize += int64(len(readBuf))
+		localStream.ReadNo++
+		localStream.ReadSize += int64(len(readBuf))
 
 		if readSize == 0 {
 			log.Warn().Msgf("read 0-size from bytes channel, exit")
 			break
 		}
-		tunnelStream.ReadState = 40
+		localStream.ReadState = 40
 
-		_, writeErr := tunnelStream.conn.Write(readBuf)
-		tunnelStream.ReadState = 50
+		_, writeErr := localStream.conn.Write(readBuf)
+		localStream.ReadState = 50
 
 		if writeErr != nil {
-			log.Err(writeErr).Msgf("conn writing failed, readNo: %d, exit", tunnelStream.ReadNo)
+			log.Err(writeErr).Msgf("conn writing failed, readNo: %d, exit", localStream.ReadNo)
 			break
 		}
 	}
 
-	sessionInfo.delTunnelStream(tunnelStream) // Remove data from tunnelStream.bytesChan to prevent stuffing
+	session.delTunnelStream(localStream) // Remove data from localStream.bytesChan to prevent stuffing
 	exitChan <- true
+	log.Info().Int("sessionId", session.Id).Msgf("write to local transport is done")
 }
 
 // resend data to Tunnel
@@ -972,59 +958,50 @@ func rewrite2Tunnel(relay *Relay, connInfoRev *ConnInfoRev) bool {
 	return true
 }
 
-// conn => tunnel stream (packetChan)
-func stream2Tunnel(tunnelStream *TunnelStream, pipeInfo *Relay, exitChan chan<- bool) {
-	_, connInfo := pipeInfo.getRevAndTransport()
-	sessionInfo := connInfo.Session
-	sessionId := sessionInfo.Id
-	packetChan := sessionInfo.packetChan
+// goroutine for conn => local stream (packetChan)
+func readLocalTransport(localStream *LocalStream, session *Session, exitChan chan<- bool) {
+	sessionId := session.Id
+	packetChan := session.packetChan
 
-	end := false
-	for !end {
-		tunnelStream.WriteState = 10
-		if (tunnelStream.WriteNo % PACKET_NUM_BASE) == 0 {
+	for {
+		localStream.WriteState = 10
+		if (localStream.WriteNo % PACKET_NUM_BASE) == 0 {
 			// In order to leave a buffer for retransmission when reconnecting after tunnel disconnection, get syncChan for every PACKET_NUM_BASE
 			// Don't send too much when the other party hasn't received it.
-			syncWaitingTimeStart := time.Now()
-			<-tunnelStream.syncChan // TODO wait for sync signal, how is it triggered?
-			waitingTime := time.Now().Sub(syncWaitingTimeStart)
-			tunnelStream.waitTimeInfo.stream2Tunnel += waitingTime
-			if waitingTime >= 5*time.Millisecond {
-				log.Debug().Int("sessionId", sessionId).Msgf("conn => tunnel stream, waitingTime: %s, total waitingTime: %s, tunnelStream writeNo: %d",
-					waitingTime, tunnelStream.waitTimeInfo.stream2Tunnel, tunnelStream.WriteNo)
-			}
+			<-localStream.syncChan // TODO wait for sync signal, how is it triggered?
 			log.Debug().Int("sessionId", sessionId).Msgf("get sync packet")
 		}
-		tunnelStream.WriteNo++
-		tunnelStream.WriteState = 20
+		localStream.WriteNo++
+		localStream.WriteState = 20
 
-		buf := tunnelStream.ringBufW.getNext() // switch buffer
-		readSize, readErr := tunnelStream.conn.Read(buf)
-		tunnelStream.WriteState = 30
+		buf := localStream.ringBufW.getNext() // switch buffer
+		readSize, readErr := localStream.conn.Read(buf)
+		localStream.WriteState = 30
 
-		log.Debug().Int("sessionId", sessionId).Msgf("conn => tunnel stream, WriteNo: %d, readSize: %d", tunnelStream.WriteNo, readSize)
+		log.Debug().Int("sessionId", sessionId).Msgf("conn => tunnel stream, WriteNo: %d, readSize: %d", localStream.WriteNo, readSize)
 		if readErr != nil {
-			log.Err(readErr).Int("sessionId", sessionId).Msgf("conn bytes reading err, writeNo: %d", sessionInfo.WriteNo)
-			packetChan <- Packet{bytes: make([]byte, 0), kind: PACKET_KIND_NORMAL, tunnelStreamId: tunnelStream.Id} // write 0 bytes data to the destination when the input source is dead
+			log.Err(readErr).Int("sessionId", sessionId).Msgf("conn bytes reading err, writeNo: %d", session.WriteNo)
+			packetChan <- Packet{bytes: make([]byte, 0), kind: PACKET_KIND_NORMAL, tunnelStreamId: localStream.Id} // write 0 bytes data to the destination when the input source is dead
 			break
 		}
 		if readSize == 0 {
-			log.Warn().Int("sessionId", sessionInfo.Id).Msg("ignore 0-size packet")
+			log.Warn().Int("sessionId", session.Id).Msg("ignore 0-size packet")
 			continue
 		}
-		tunnelStream.WriteSize += int64(readSize)
-		tunnelStream.WriteState = 40
+		localStream.WriteSize += int64(readSize)
+		localStream.WriteState = 40
 
-		if (tunnelStream.WriteNo%PACKET_NUM_BASE) == 0 && len(tunnelStream.syncChan) == 0 {
-			work := <-tunnelStream.syncChan // if it's the last packet in the packet group and packetNumber SYNC is coming, wait for SYNC before sending
-			tunnelStream.syncChan <- work   // Since we read ahead SYNC, we write back SYNC.
+		if (localStream.WriteNo%PACKET_NUM_BASE) == 0 && len(localStream.syncChan) == 0 {
+			work := <-localStream.syncChan // if it's the last packet in the packet group and packetNumber SYNC is coming, wait for SYNC before sending
+			localStream.syncChan <- work   // Since we read ahead SYNC, we write back SYNC.
 		}
-		tunnelStream.WriteState = 50
+		localStream.WriteState = 50
 
-		packetChan <- Packet{bytes: buf[:readSize], kind: PACKET_KIND_NORMAL, tunnelStreamId: tunnelStream.Id}
+		packetChan <- Packet{bytes: buf[:readSize], kind: PACKET_KIND_NORMAL, tunnelStreamId: localStream.Id}
 	}
 
 	exitChan <- true
+	log.Info().Int("sessionId", sessionId).Msgf("read from local transport is done")
 }
 
 type ConnInfoRev struct {
@@ -1051,40 +1028,40 @@ func handleControlPacket(session *Session, payloadBuf []byte) {
 			log.Fatal().Err(err).Msgf("fail to parse ctrlRequestChan")
 		}
 		session.ctrl.ctrlRequestChan <- &header // bytes from conn, now this control request header is pushed into chan
-		log.Info().Msgf("TunnelStream ctrl_req_header pushed ctrlRequestChan")
+		log.Info().Msgf("LocalStream ctrl_req_header pushed ctrlRequestChan")
 	case CTRL_RESP_CONNECTION_ESTABLISHED:
 		resp := CtrlResponse{}
 		if err := json.NewDecoder(&buffer).Decode(&resp); err != nil {
 			log.Fatal().Msgf("failed to read ctrlRequestChan: %v", err)
 		}
-		if tunnelStream := session.getTunnelStream(resp.TunnelStreamId); tunnelStream != nil {
-			tunnelStream.ctrlRespHeaderChan <- &resp
-			log.Info().Msgf("ctrl_resp_header pushed to TunnelStream %d ctrlRespHeaderChan", tunnelStream.Id)
+		if tunnelStream := session.getTunnelStream(resp.LocalStreamId); tunnelStream != nil {
+			tunnelStream.ctrlRespChan <- &resp
+			log.Info().Msgf("ctrl_resp_header pushed to LocalStream %d ctrlRespChan", tunnelStream.Id)
 		} else {
-			log.Error().Msgf("TunnelStream %d not found, ctrl_resp_header is discarded", resp.TunnelStreamId)
+			log.Error().Msgf("LocalStream %d not found, ctrl_resp_header is discarded", resp.LocalStreamId)
 		}
 	}
 }
 
-// read from conn and parsed into packet
-func packetReader(relay *Relay) {
-	rev, connInfo := relay.getRevAndTransport()
-	session := connInfo.Session
+// tunnel transport => tunnelStream bytesChan
+func readTunnelTransport(relay *Relay) {
+	rev, transport := relay.getRevAndTransport()
+	session := transport.Session
 
 	log.Info().Msgf("conn reader goroutine starts ...")
 	buf := make([]byte, BUFSIZE)
 	for {
 		readSize := 0
-		var tunnelStream *TunnelStream
+		var tunnelStream *LocalStream
 		for {
 			session.readState = 10
-			if packet, err := connInfo.readNormalPacketFromConn(buf); err != nil {
+			if packet, err := transport.readNormalPacketFromConn(buf); err != nil {
 				session.readState = 20
 				log.Err(err).Msgf("fail to read from conn, readNo: %d", session.ReadNo)
 
 				end := false
-				_ = connInfo.Conn.Close()
-				connInfo, rev, end = relay.reconnect("read", rev)
+				_ = transport.Conn.Close()
+				transport, rev, end = relay.reconnect("read", rev)
 				if end {
 					readSize = 0
 					relay.shouldEnd = true
@@ -1095,7 +1072,7 @@ func packetReader(relay *Relay) {
 				log.Debug().Msgf("read from conn, size: %d", len(packet.bytes))
 
 				if packet.tunnelStreamId == TUNNEL_STREAM_ID_CTRL {
-					log.Debug().Msgf("TunnelStream control packet")
+					log.Debug().Msgf("LocalStream control packet")
 					handleControlPacket(session, packet.bytes)
 					readSize = 1 // set readSize to 1 so that the process doesn't shouldEnd
 				} else {
@@ -1110,13 +1087,7 @@ func packetReader(relay *Relay) {
 						// tunnelStream.ringBufR.getNext() // TODO comment out this?
 
 						cloneBuf := packet.bytes
-						waitingTimeStart := time.Now()
 						tunnelStream.bytesChan <- cloneBuf // TODO buffer is sent over channel, need to copy?
-						waitingTime := time.Now().Sub(waitingTimeStart)
-						tunnelStream.waitTimeInfo.packetReader += waitingTime
-						if waitingTime >= 5*time.Millisecond {
-							log.Debug().Msgf("get buffer from bytes channel, readNo: %d, cost: %s", tunnelStream.ReadNo, waitingTime)
-						}
 						readSize = len(cloneBuf)
 					} else {
 						log.Info().Msgf("cit not found: %d, discard the packet", packet.tunnelStreamId)
@@ -1135,7 +1106,7 @@ func packetReader(relay *Relay) {
 
 		if readSize == 0 {
 			if tunnelStream != nil && len(tunnelStream.syncChan) == 0 {
-				tunnelStream.syncChan <- true // when exiting, stream2Tunnel() may be waiting, notify syncChan here
+				tunnelStream.syncChan <- true // when exiting, readLocalTransport() may be waiting, notify syncChan here
 			}
 			session.readState = 50
 
@@ -1143,7 +1114,7 @@ func packetReader(relay *Relay) {
 				relay.sendRelease()
 				for _, workCiti := range session.tunnelStreamMap { // shouldEnd all tunnel streams
 					if len(workCiti.syncChan) == 0 {
-						workCiti.syncChan <- true // when exiting, stream2Tunnel() may be waiting, notify syncChan here
+						workCiti.syncChan <- true // when exiting, readLocalTransport() may be waiting, notify syncChan here
 					}
 				}
 				break
@@ -1231,8 +1202,8 @@ func writePacketToWriter(pkt *Packet, writer io.Writer, transport *Transport, ne
 	return true, writeErr
 }
 
-// packetChan => conn
-func packetWriter(role string, relay *Relay) {
+// session packetChan => conn
+func writeTunnelTransport(relay *Relay) {
 	session := relay.transport.Session
 	sessionId := session.Id
 	packetChan := session.packetChan
@@ -1248,16 +1219,7 @@ func packetWriter(role string, relay *Relay) {
 collectAndWriteLoop:
 	for {
 		session.writeState = 10
-
-		packetChanWaitingTimeStart := time.Now()
 		packet := <-packetChan
-		span := time.Now().Sub(packetChanWaitingTimeStart)
-		if span > 500*time.Microsecond {
-			session.packetWriterWaitTime += span
-			if span > 5*time.Millisecond {
-				log.Debug().Str("role", role).Int("sessionId", sessionId).Msgf("get a packet from packetChan(%v), waited for %s", packetChan, span)
-			}
-		}
 
 		session.writeState = 20
 		buffer.Reset()
@@ -1272,7 +1234,7 @@ collectAndWriteLoop:
 			sentPkt := Packet{bytes: packet.bytes, kind: PACKET_KIND_NORMAL_DIRECT, tunnelStreamId: packet.tunnelStreamId}
 			streamContinues, err := writePacketToWriter(&sentPkt, &buffer, connInfoRev.transport, true) // bytes written to buffer
 			if err != nil {
-				log.Fatal().Str("role", role).Int("sessionId", sessionId).Err(err).Msgf("fail to write to conn")
+				log.Fatal().Int("sessionId", sessionId).Err(err).Msgf("fail to write to conn")
 			}
 			if !streamContinues {
 				break collectAndWriteLoop
@@ -1285,7 +1247,8 @@ collectAndWriteLoop:
 		if buffer.Len() != 0 {
 			log.Debug().Int("sessionId", sessionId).Msgf("write buffered packets, size: %d ...", buffer.Len())
 			if _, err := connInfoRev.transport.Conn.Write(buffer.Bytes()); err != nil { // use transport to write bytes
-				log.Err(err).Str("role", role).Int("sessionId", sessionId).Msgf("tunnel batch writing failed, writeNo: %d", connInfoRev.transport.Session.WriteNo)
+				log.Err(err).Int("sessionId", sessionId).
+					Msgf("tunnel batch writing failed, writeNo: %d", connInfoRev.transport.Session.WriteNo)
 
 				// Batch buffer is encrypted with the cipher before reconnect, so if sent as is, decryption fails on the receiving side.
 				// To avoid that, if batch write fails, recover with rewrite without batch writing.
@@ -1302,7 +1265,7 @@ collectAndWriteLoop:
 			break
 		}
 	}
-	log.Info().Str("role", role).Int("sessionId", sessionId).Msg("writing to conn ends")
+	log.Info().Int("sessionId", sessionId).Msg("writing to conn ends")
 
 	relay.exitChan <- true
 }
@@ -1333,91 +1296,48 @@ func writePacketToTransportWithRetry(relay *Relay, pkt *Packet, connInfoRev *Con
 	}
 }
 
-func newPipeInfo(connInfo *Transport, citServerFlag bool, reconnect func(sessionInfo *Session) *Transport) (*Relay, bool) {
-	sessionMgr.mutex.get("newPipeInfo")
+func newRelay(transport *Transport, isTunnelStreamServer bool, reconnect func(session *Session) *Transport) (*Relay, bool) {
+	sessionMgr.mutex.get("newRelay")
 	defer sessionMgr.mutex.rel()
 
-	sessionInfo := connInfo.Session
-	info, has := sessionMgr.relayMap[sessionInfo.Id]
-	if has {
-		return info, false
+	session := transport.Session
+	relay, exists := sessionMgr.relayMap[session.Id]
+	if exists {
+		return relay, false
 	}
 
-	info = &Relay{
-		reconnectFunc: reconnect,
-		transport:     connInfo,
-		exitChan:      make(chan bool),
-		// reconnected:   make(chan bool),
-		isTunnelStreamServer: citServerFlag,
+	relay = &Relay{
+		reconnectFunc:        reconnect,
+		transport:            transport,
+		exitChan:             make(chan bool),
+		isTunnelStreamServer: isTunnelStreamServer,
 	}
-	sessionMgr.relayMap[sessionInfo.Id] = info
-	return info, true
+	sessionMgr.relayMap[session.Id] = relay
+	return relay, true
 }
 
-func startRelaySession(role string, connInfo *Transport, interval int, citServerFlag bool, reconnect func(sessionInfo *Session) *Transport) *Relay {
-	pipeInfo, isSessionNew := newPipeInfo(connInfo, citServerFlag, reconnect)
-	connInfo.Session.SetState(Session_state_connected)
-	sessionId := connInfo.Session.Id
-	if !isSessionNew {
-		log.Info().Str("role", role).Int("sessionId", sessionId).Msgf("not a new session, skip process reconnect")
-		return pipeInfo
-	}
+func keepalive(session *Session, relay *Relay, interval int) {
+	log.Info().Msgf("start keepalive routine ...")
 
-	log.Info().Str("role", role).Int("sessionId", sessionId).Msgf("launch reader/writer routines ...")
-	go packetWriter(role, pipeInfo)
-	go packetReader(pipeInfo)
-	if PRE_ENC {
-		go packetEncrypter(pipeInfo)
-	}
-
-	sessionInfo := connInfo.Session
-
-	// keepalive goroutine
-	go func() {
-		log.Info().Str("role", role).Msgf("start keepalive routine ...")
-
-		// TODO update this to a better way
-		for !pipeInfo.shouldEnd {
-			for sleepTime := 0; sleepTime < interval; sleepTime += KeepaliveSleepMs {
-				time.Sleep(KeepaliveSleepMs * time.Millisecond)
-				if pipeInfo.shouldEnd {
-					break
-				}
-			}
-			if !pipeInfo.isConnecting {
-				sessionInfo.packetChan <- Packet{kind: PACKET_KIND_DUMMY, tunnelStreamId: TUNNEL_STREAM_ID_CTRL}
+	// TODO update this to a better way
+	for !relay.shouldEnd {
+		for sleepTime := 0; sleepTime < interval; sleepTime += KeepaliveSleepMs {
+			time.Sleep(KeepaliveSleepMs * time.Millisecond)
+			if relay.shouldEnd {
+				break
 			}
 		}
-		log.Info().Int("sessionId", sessionId).Msgf("keepalive routine exits")
-	}()
-
-	return pipeInfo
+		if !relay.isConnecting {
+			session.packetChan <- Packet{kind: PACKET_KIND_DUMMY, tunnelStreamId: TUNNEL_STREAM_ID_CTRL}
+		}
+	}
+	log.Info().Int("sessionId", session.Id).Msgf("keepalive routine exits")
 }
 
 // KeepaliveSleepMs interval for keepalive check
-// If this is long, it takes time to wait for localRelay post-processing.
+// If this is long, it takes time to wait for relayLocalTransport post-processing.
 // If it's short, it will be heavy.
 const KeepaliveSleepMs = 500
-
-// Relay tunnel stream between transport stream
-func localRelay(relay *Relay, tunnelStream *TunnelStream, hostInfo Host) {
-	exitChan := make(chan bool)
-	session := relay.transport.Session
-
-	go stream2Tunnel(tunnelStream, relay, exitChan)   // TunnelStream packetChan <= conn
-	go tunnel2Stream(session, tunnelStream, exitChan) // conn <= TunnelStream bytesChan
-
-	<-exitChan
-	_ = tunnelStream.conn.Close()
-
-	<-exitChan
-
-	log.Printf("close tunnelStream: sessionId %d, Id %d, read %d, write %d", session.Id, tunnelStream.Id, tunnelStream.ReadSize, tunnelStream.WriteSize)
-	log.Printf("close tunnelStream: readNo %d, writeNo %d, bytesChan %d", tunnelStream.ReadNo, tunnelStream.WriteNo, len(tunnelStream.bytesChan))
-	log.Printf("close tunnelStream: session readNo %d, session writeNo %d", session.ReadNo, session.WriteNo)
-	log.Printf("waitTime: stream2Tunnel %s, tunnel2Stream %s, packetWriter %s, packetReader %s",
-		tunnelStream.waitTimeInfo.stream2Tunnel, tunnelStream.waitTimeInfo.tunnel2Stream, session.packetWriterWaitTime, tunnelStream.waitTimeInfo.packetReader)
-}
 
 // 再接続情報
 type ReconnectInfo struct {
@@ -1490,17 +1410,17 @@ func (listener *RelayListener) Close() {
 	_ = listener.listener.Close()
 }
 
-type ListenGroup struct {
+type ListenerGroup struct {
 	listeners []RelayListener
 }
 
-func (group *ListenGroup) Close() {
+func (group *ListenerGroup) Close() {
 	for _, info := range group.listeners {
 		info.Close()
 	}
 }
 
-func NewListen(isClient bool, forwardList []Forward) (*ListenGroup, []Forward) {
+func NewListen(isClient bool, forwardList []Forward) (*ListenerGroup, []Forward) {
 	return NewListenWithMaker(isClient, forwardList, func(dst string) (Listener, error) {
 		listen, err := net.Listen("tcp", dst)
 		if err != nil {
@@ -1510,8 +1430,8 @@ func NewListen(isClient bool, forwardList []Forward) (*ListenGroup, []Forward) {
 	})
 }
 
-func NewListenWithMaker(isClient bool, forwardList []Forward, listenMaker func(dst string) (Listener, error)) (*ListenGroup, []Forward) {
-	listenGroup := ListenGroup{listeners: []RelayListener{}}
+func NewListenWithMaker(isClient bool, forwardList []Forward, listenMaker func(dst string) (Listener, error)) (*ListenerGroup, []Forward) {
+	listenGroup := ListenerGroup{listeners: []RelayListener{}}
 	var localForwards []Forward
 
 	for _, forwardInfo := range forwardList {
@@ -1532,137 +1452,168 @@ func NewListenWithMaker(isClient bool, forwardList []Forward, listenMaker func(d
 	return &listenGroup, localForwards
 }
 
-func acceptAndRelayForever(role string, listener RelayListener, relay *Relay) {
-	for {
-		acceptAndRelay(role, listener, relay)
-	}
-}
-
-func acceptAndRelay(role string, listener RelayListener, relay *Relay) {
-	sessionId := relay.transport.Session.Id
-
-	log.Info().Str("role", role).Int("sessionId", sessionId).Msgf("listening connections at %s ... (%s)", listener.forward.Src.String(), listener.forward.String())
-	conn, err := listener.listener.Accept()
-	if err != nil {
-		log.Fatal().Err(err)
-	}
-	needClose := true
-	defer func() {
-		if needClose {
-			_ = conn.Close()
-		}
-	}()
-
-	log.Info().Str("role", role).Int("sessionId", sessionId).Msgf("new connection accepted")
-
-	tunnelStream := relay.transport.Session.addTunnelStream(role, conn, TUNNEL_STREAM_ID_CTRL)
-	dest := listener.forward.Dest
-	transport := relay.transport
-
-	{
-		var buffer bytes.Buffer
-		buffer.Write([]byte{CTRL_REQ_NEW_CONNECTION})
-		buf, _ := json.Marshal(&CtrlRequest{Host: dest, TunnelStreamId: tunnelStream.Id})
-		buffer.Write(buf)
-		transport.Session.packetChan <- Packet{bytes: buffer.Bytes(), kind: PACKET_KIND_NORMAL, tunnelStreamId: TUNNEL_STREAM_ID_CTRL} // accept a new connection, push ctrl_req_header to notify the other party
-		log.Info().Str("role", role).Int("sessionId", sessionId).Msgf("ctrl_req_header pushed to packetChan(%v), wait for responses ...", transport.Session.packetChan)
-	}
-
-	ctrlRespHeader := <-tunnelStream.ctrlRespHeaderChan
-	if ctrlRespHeader.Success {
-		log.Info().Msgf("ctrl_resp_header received, relay accepted connection")
-		go localRelay(relay, tunnelStream, dest) // server side, accept and relay
-		needClose = false
-	} else {
-		log.Error().Str("role", role).Int("sessionId", sessionId).Msgf("failed to connect %s:%s", dest.String(), ctrlRespHeader.Message)
-	}
-}
-
 // ListenAndNewConnect waits for a session to pass through Tunnel & connect to the communication destination of the session
 // @param transport Tunnel
 // @param port Listening port number
 // @param parm tunnel information
 // @param reconnect reconnection function
-func ListenAndNewConnect(isClient bool, listenGroup *ListenGroup, localForwardList []Forward, connInfo *Transport, param *TunnelParam, reconnect func(sessionInfo *Session) *Transport) {
+func ListenAndNewConnect(isClient bool, listenGroup *ListenerGroup, localForwardList []Forward, connInfo *Transport, param *TunnelParam, reconnect func(sessionInfo *Session) *Transport) {
 	ListenAndNewConnectWithDialer(isClient, listenGroup, localForwardList, connInfo, param, reconnect, func(dst string) (io.ReadWriteCloser, error) {
 		log.Info().Msgf("dial %s", dst)
 		return net.Dial("tcp", dst)
 	})
 }
 
-func ListenAndNewConnectWithDialer(isClient bool, listenGroup *ListenGroup, localForwards []Forward, connInfo *Transport, param *TunnelParam, reconnect func(sessionInfo *Session) *Transport, dialer func(dst string) (io.ReadWriteCloser, error)) {
-	role := "server"
-	if isClient {
-		role = "client"
+func ListenAndNewConnectWithDialer(isClient bool, listenerGroup *ListenerGroup, localForwards []Forward, transport *Transport, param *TunnelParam,
+	reconnect func(session *Session) *Transport, dialer func(dst string) (io.ReadWriteCloser, error)) {
+	relay, isSessionNew := newRelay(transport, len(listenerGroup.listeners) > 0, reconnect)
+
+	session := transport.Session
+	session.SetState(Session_state_connected)
+	if isSessionNew {
+		log.Info().Int("sessionId", session.Id).Msgf("new session, launch reader/writer routines ...")
+		go readTunnelTransport(relay)  // transport read: tunnelStream bytesChan <= transport conn
+		go writeTunnelTransport(relay) // transport write: session packetChan => transport conn
+		if PRE_ENC {
+			go packetEncrypter(relay)
+		}
+		go keepalive(session, relay, param.KeepAliveInterval)
 	}
 
-	relay := startRelaySession(role, connInfo, param.KeepAliveInterval, len(listenGroup.listeners) > 0, reconnect)
-
-	for _, listener := range listenGroup.listeners {
-		go acceptAndRelayForever(role, listener, relay) // start each listening in the listenerGroup
+	for _, listener := range listenerGroup.listeners {
+		go acceptAndRelayForever(listener, relay) // start each listening in the listenerGroup
 	}
 
-	log.Debug().Str("role", role).Msgf("start local forwards ...")
+	log.Debug().Msgf("start local forwards ...")
 	if len(localForwards) > 0 {
 		for {
-			ctrlReqHeader := connInfo.Session.getCtrlReqHeader()
-			if ctrlReqHeader == nil {
-				log.Info().Msgf("receive nil ctrlReqHeader, exit the local forwarding loop")
+			ctrlRequest := transport.Session.getCtrlRequest()
+			if ctrlRequest == nil {
+				log.Info().Msgf("receive nil ctrlRequest, exit the local forwarding loop")
 				break
 			}
-			log.Debug().Msgf("get non-nil ctrlReqHeader, initiate a new connection now ...")
-			go establishNewConnection(role, dialer, ctrlReqHeader, relay)
+			log.Debug().Msgf("get non-nil ctrlRequest, initiate a new connection now ...")
+			go establishNewConnection(dialer, ctrlRequest, relay) // create new connection and relay
 		}
-		log.Debug().Str("role", role).Msgf("local forwards ended")
+		log.Debug().Msgf("local forwards ended")
 	}
 
-	log.Debug().Str("role", role).Msgf("waiting listener group exiting ...")
-	if len(listenGroup.listeners) > 0 {
-		for {
-			log.Debug().Str("role", role).Msgf("wait for releaseChan")
-			if !<-connInfo.Session.releaseChan {
-				break
-			}
-			log.Debug().Str("role", role).Msgf("client side: %t", isClient)
-			if !isClient {
-				break
-			}
-		}
-		log.Debug().Str("role", role).Msgf("local listeners ended")
-	}
-	log.Debug().Str("role", role).Msgf("disconnected")
-	connInfo.Session.SetState(Session_state_disconnected)
+	waitListenerGroupExit(isClient, transport, listenerGroup)
+	log.Debug().Msgf("disconnected")
+	transport.Session.SetState(Session_state_disconnected)
 }
 
-// establishNewConnection initiate a new tcp connection
-func establishNewConnection(role string, dialer func(dst string) (io.ReadWriteCloser, error), header *CtrlRequest, relay *Relay) {
-	destAddr := header.Host.String()
-	destConn, err := dialer(destAddr)
+func waitListenerGroupExit(isClient bool, transport *Transport, listenerGroup *ListenerGroup) {
+	log.Debug().Msgf("waiting listener group exiting ...")
+	if len(listenerGroup.listeners) == 0 {
+		log.Debug().Msgf("no listeners to wait")
+		return
+	}
+	for {
+		log.Debug().Msgf("wait for releaseChan")
+		if !<-transport.Session.releaseChan {
+			break
+		}
+		log.Debug().Msgf("client side: %t", isClient)
+		if !isClient {
+			break
+		}
+	}
+	log.Debug().Msgf("local listeners ended")
+}
 
-	sessionInfo := relay.transport.Session
-	sessionId := sessionInfo.Id
-	tunnelStream := sessionInfo.addTunnelStream(role, destConn, header.TunnelStreamId)
+// Relay tunnel stream between transport stream
+func relayLocalTransport(session *Session, localStream *LocalStream) {
+	exitChan := make(chan bool)
+	go readLocalTransport(localStream, session, exitChan)  // local conn read: session packetChan <= local conn
+	go writeLocalTransport(session, localStream, exitChan) // local conn write: LocalStream bytesChan => local conn
 
-	{ // push ctrl_resp_header
+	<-exitChan
+	_ = localStream.conn.Close()
+	<-exitChan
+	log.Info().
+		Int("sessionId", session.Id).
+		Msgf("local relay is done")
+}
+
+// initiate a new tcp connection
+func establishNewConnection(dialer func(dst string) (io.ReadWriteCloser, error), header *CtrlRequest, relay *Relay) {
+	addr := header.Host.String()
+	conn, err := dialer(addr)
+
+	session := relay.transport.Session
+	sessionId := session.Id
+	localStream := session.addTunnelStream(conn, header.LocalStreamId)
+
+	{ // push ctrl_resp
 		var buffer bytes.Buffer
 		buffer.Write([]byte{CTRL_RESP_CONNECTION_ESTABLISHED})
-		resp := CtrlResponse{Success: err == nil, Message: fmt.Sprint(err), TunnelStreamId: header.TunnelStreamId}
+		resp := CtrlResponse{Success: err == nil, Message: fmt.Sprint(err), LocalStreamId: header.LocalStreamId}
 		buf, _ := json.Marshal(&resp)
 		buffer.Write(buf)
-		sessionInfo.packetChan <- Packet{bytes: buffer.Bytes(), kind: PACKET_KIND_NORMAL, tunnelStreamId: TUNNEL_STREAM_ID_CTRL} // ctrl_resp_header pushed
-		log.Info().Str("role", role).Int("sessionId", sessionId).Msg("ctrl resp ctrlRequestChan pushed into packetChan")
+		session.packetChan <- Packet{bytes: buffer.Bytes(), kind: PACKET_KIND_NORMAL, tunnelStreamId: TUNNEL_STREAM_ID_CTRL} // ctrl_resp pushed
+		log.Info().Int("sessionId", sessionId).Msg("ctrl resp ctrlRequestChan pushed into packetChan")
 
 		if err != nil { // note this is the dialing error
-			log.Err(err).Str("role", role).Int("sessionId", sessionId).Msgf("fail to dial %s", destAddr)
+			log.Err(err).Int("sessionId", sessionId).Msgf("fail to dial %s", addr)
 			return
 		}
 	}
-	defer func() { _ = destConn.Close() }()
+	defer func() { _ = conn.Close() }()
 
-	log.Info().Str("role", role).Int("sessionId", sessionId).Msgf("connected to %s, star relaying ...", destAddr)
-	localRelay(relay, tunnelStream, header.Host) // client side, connect and relay
+	log.Info().Int("sessionId", sessionId).Msgf("connected to %s, star relaying ...", addr)
+	relayLocalTransport(session, localStream) // client side, connect and relay
 
-	log.Info().Str("role", role).Int("sessionId", sessionId).Msgf("connection to %s closed", destAddr)
+	log.Info().Int("sessionId", sessionId).Msgf("connection to %s closed", addr)
+}
+
+func acceptAndRelay(listener RelayListener, relay *Relay) {
+	session := relay.transport.Session
+	sessionId := session.Id
+
+	log.Info().Int("sessionId", sessionId).
+		Msgf("listening connections at %s ... (%s)", listener.forward.Src.String(), listener.forward.String())
+	conn, err := listener.listener.Accept()
+	if err != nil {
+		log.Fatal().Err(err)
+	}
+	willCloseConn := true
+	defer func() {
+		if willCloseConn {
+			_ = conn.Close()
+		}
+	}()
+
+	log.Info().Int("sessionId", sessionId).Msgf("new connection accepted")
+
+	tunnelStream := session.addTunnelStream(conn, TUNNEL_STREAM_ID_CTRL)
+	dest := listener.forward.Dest
+	transport := relay.transport
+
+	// push ctrl_req, notify the other party to initiate new connection
+	{
+		var buffer bytes.Buffer
+		buffer.Write([]byte{CTRL_REQ_NEW_CONNECTION})
+		buf, _ := json.Marshal(&CtrlRequest{Host: dest, LocalStreamId: tunnelStream.Id})
+		buffer.Write(buf)
+		transport.Session.packetChan <- Packet{bytes: buffer.Bytes(), kind: PACKET_KIND_NORMAL, tunnelStreamId: TUNNEL_STREAM_ID_CTRL} // accept a new connection, push ctrl_req_header to notify the other party
+		log.Info().Int("sessionId", sessionId).Msgf("ctrl_req pushed to packetChan(%v), waiting ctrl_resp ...", transport.Session.packetChan)
+	}
+
+	ctrlResp := <-tunnelStream.ctrlRespChan
+	if ctrlResp.Success {
+		log.Info().Int("sessionId", sessionId).Msgf("ctrl_resp received, relay accepted connection")
+		go relayLocalTransport(session, tunnelStream) // server side, accept and relay
+		willCloseConn = false
+	} else {
+		log.Error().Int("sessionId", sessionId).Msgf("ctrl_resp failed, dest: %s, message: %s", dest.String(), ctrlResp.Message)
+	}
+}
+
+func acceptAndRelayForever(listener RelayListener, relay *Relay) {
+	for {
+		acceptAndRelay(listener, relay)
+	}
 }
 
 // sends a dummy(nil) ctrlRequestChan to avoid waiting

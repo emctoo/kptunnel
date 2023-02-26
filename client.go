@@ -98,7 +98,7 @@ type WebsocketClient struct {
 	ProxyHost     string
 	Forwards      []Forward
 	ReconnectInfo ReconnectInfo
-	ListenerGroup *ListenGroup
+	ListenerGroup *ListenerGroup
 }
 
 func CreateWebsocketClient(serverInfo Host, param *TunnelParam, forwardList []Forward, userAgent string, proxyHost string) (*WebsocketClient, error) {
