@@ -1028,7 +1028,7 @@ func handleControlPacket(session *Session, payloadBuf []byte) {
 			log.Fatal().Err(err).Msgf("fail to parse ctrlRequestChan")
 		}
 		session.ctrl.ctrlRequestChan <- &header // bytes from conn, now this control request header is pushed into chan
-		log.Info().Msgf("LocalStream ctrl_req_header pushed ctrlRequestChan")
+		log.Info().Msgf("LocalStream ctrl_req pushed ctrlRequestChan")
 	case CTRL_RESP_CONNECTION_ESTABLISHED:
 		resp := CtrlResponse{}
 		if err := json.NewDecoder(&buffer).Decode(&resp); err != nil {
@@ -1036,33 +1036,37 @@ func handleControlPacket(session *Session, payloadBuf []byte) {
 		}
 		if tunnelStream := session.getTunnelStream(resp.LocalStreamId); tunnelStream != nil {
 			tunnelStream.ctrlRespChan <- &resp
-			log.Info().Msgf("ctrl_resp_header pushed to LocalStream %d ctrlRespChan", tunnelStream.Id)
+			log.Info().Msgf("ctrl_resp pushed to LocalStream %d ctrlRespChan", tunnelStream.Id)
 		} else {
-			log.Error().Msgf("LocalStream %d not found, ctrl_resp_header is discarded", resp.LocalStreamId)
+			log.Error().Msgf("LocalStream %d not found, ctrl_resp is discarded", resp.LocalStreamId)
 		}
 	}
 }
 
 // tunnel transport => tunnelStream bytesChan
 func readTunnelTransport(relay *Relay) {
-	rev, transport := relay.getRevAndTransport()
-	session := transport.Session
+	rev, tunnelTransport := relay.getRevAndTransport()
+	session := tunnelTransport.Session
 
-	log.Info().Msgf("conn reader goroutine starts ...")
+	log.Info().Msgf("tunnel tunnelTransport reader goroutine starts ...")
 	buf := make([]byte, BUFSIZE)
 	for {
 		readSize := 0
-		var tunnelStream *LocalStream
+		var localStream *LocalStream
 		for {
 			session.readState = 10
-			if packet, err := transport.readNormalPacketFromConn(buf); err != nil {
+			if packet, err := tunnelTransport.readNormalPacketFromConn(buf); err != nil {
 				session.readState = 20
-				log.Err(err).Msgf("fail to read from conn, readNo: %d", session.ReadNo)
+				log.Err(err).Msgf("fail to read from tunnel transport, readNo: %d", session.ReadNo)
 
+				_ = tunnelTransport.Conn.Close()
+				log.Warn().Msgf("tunnel transport closed")
+
+				log.Info().Msgf("reconnecting tunnel transport ...")
 				end := false
-				_ = transport.Conn.Close()
-				transport, rev, end = relay.reconnect("read", rev)
+				tunnelTransport, rev, end = relay.reconnect("read", rev)
 				if end {
+					log.Info().Msgf("reconnecting ends, ending now ...")
 					readSize = 0
 					relay.shouldEnd = true
 					break
@@ -1076,18 +1080,18 @@ func readTunnelTransport(relay *Relay) {
 					handleControlPacket(session, packet.bytes)
 					readSize = 1 // set readSize to 1 so that the process doesn't shouldEnd
 				} else {
-					if tunnelStream = session.getTunnelStream(packet.tunnelStreamId); tunnelStream != nil {
-						// packet.bytes to tunnelStream.bytesChan
+					if localStream = session.getTunnelStream(packet.tunnelStreamId); localStream != nil {
+						// packet.bytes to localStream.bytesChan
 						// put in and processed in another thread.
 						// On the other hand, packet.bytes refers to a fixed address, so if you readNormalPacketFromConn before processing in another thread, the contents of packet.bytes will be overwritten.
 						// Copy to prevent that.
 
-						// cloneBuf := tunnelStream.ringBufR.getNext()[:len(packet.bytes)]
+						// cloneBuf := localStream.ringBufR.getNext()[:len(packet.bytes)]
 						// copy( cloneBuf, packet.bytes )
-						// tunnelStream.ringBufR.getNext() // TODO comment out this?
+						// localStream.ringBufR.getNext() // TODO comment out this?
 
 						cloneBuf := packet.bytes
-						tunnelStream.bytesChan <- cloneBuf // TODO buffer is sent over channel, need to copy?
+						localStream.bytesChan <- cloneBuf // TODO buffer is sent over channel, need to copy?
 						readSize = len(cloneBuf)
 					} else {
 						log.Info().Msgf("cit not found: %d, discard the packet", packet.tunnelStreamId)
@@ -1102,11 +1106,12 @@ func readTunnelTransport(relay *Relay) {
 				break
 			}
 		}
-		session.readState = 40
 
+		session.readState = 40
 		if readSize == 0 {
-			if tunnelStream != nil && len(tunnelStream.syncChan) == 0 {
-				tunnelStream.syncChan <- true // when exiting, readLocalTransport() may be waiting, notify syncChan here
+			log.Debug().Msgf("read size is 0")
+			if localStream != nil && len(localStream.syncChan) == 0 {
+				localStream.syncChan <- true // when exiting, readLocalTransport() may be waiting, notify syncChan here
 			}
 			session.readState = 50
 
