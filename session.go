@@ -7,13 +7,11 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 
-	"bytes"
 	"sync"
 	"time"
 
@@ -81,14 +79,11 @@ func (config TunnelParam) String() string {
 	return fmt.Sprintf("TunnelConfig(mode=%s, server=%s)", config.Mode, config.ServerInfo.String())
 }
 
-// セッションの再接続時に、
-// 再送信するためのデータを保持しておくパケット数
-const PACKET_NUM_BASE = 30
+const PACKET_NUM_BASE = 30 // when reconnecting the session, number of packets to keep data for retransmission
 const PACKET_NUM_DIV = 2
 const PACKET_NUM = (PACKET_NUM_DIV * PACKET_NUM_BASE)
 
-// 書き込みを結合する最大サイズ
-const MAX_PACKET_SIZE = 10 * 1024
+const MAX_PACKET_SIZE = 1 * 1024 // maximum size to combine writes
 
 const TUNNEL_STREAM_ID_CTRL = 0
 const TUNNEL_STREAM_ID_USR = 1
@@ -96,8 +91,7 @@ const TUNNEL_STREAM_ID_USR = 1
 const CTRL_REQ_NEW_CONNECTION = 0
 const CTRL_RESP_CONNECTION_ESTABLISHED = 1
 
-// PRE_ENC Can't be true until CryptCtrl after reconnection can use the same
-const PRE_ENC = false
+const PRE_ENC = false // Can't be true until CryptCtrl after reconnection can use the same
 
 type DummyConn struct {
 }
@@ -541,29 +535,25 @@ func (session *Session) cacheWritePacket(packet *Packet) {
 	session.wroteSize += int64(len(packet.bytes))
 }
 
-func getSessionTransport(session *Session) *Transport {
+func lookupTransportBySessionId(session *Session) *Transport {
 	sessionId := session.Id
-	log.Print("getSessionTransport ... session: ", sessionId)
 
-	sub := func() *Transport {
-		sessionMgr.mutex.get("getSessionTransport-sub")
+	lookupFn := func() *Transport {
+		sessionMgr.mutex.get("lookupTransportBySessionId-lookupFn")
 		defer sessionMgr.mutex.rel()
 
-		if connInfo, has := sessionMgr.transportMap[sessionId]; has {
-			return connInfo
+		if transport, exists := sessionMgr.transportMap[sessionId]; exists {
+			return transport
 		}
 		return nil
 	}
-	for {
-		if connInfo := sub(); connInfo != nil {
-			log.Print("getSessionTransport ok ... session: ", sessionId)
-			return connInfo
-		}
-		// if !session.hasTunnelStream() {
-		//     log.Print( "getSessionTransport ng ... session: ", sessionId )
-		//     return nil
-		// }
 
+	log.Debug().Msgf("try to find transport by sessionId %s", sessionId)
+	for {
+		if transport := lookupFn(); transport != nil {
+			log.Debug().Msgf("sessionId %d, transport found")
+			return transport
+		}
 		time.Sleep(500 * time.Millisecond)
 	}
 }
@@ -585,52 +575,6 @@ func WaitPauseSession(sessionInfo *Session) bool {
 
 		time.Sleep(500 * time.Millisecond)
 	}
-}
-
-// parses control packet from binary
-func handleControlPacket(session *Session, payloadBuf []byte) {
-	if len(payloadBuf) == 0 {
-		log.Print("ignore empty buffer 0")
-		return
-	}
-	ctrlHeaderKind := payloadBuf[0]
-	body := payloadBuf[1:]
-
-	var buffer bytes.Buffer
-	buffer.Write(body)
-
-	switch ctrlHeaderKind {
-	case CTRL_REQ_NEW_CONNECTION:
-		header := CtrlRequest{}
-		if err := json.NewDecoder(&buffer).Decode(&header); err != nil {
-			log.Fatal().Err(err).Msgf("fail to parse ctrlRequestChan")
-		}
-		session.ctrl.ctrlRequestChan <- &header // bytes from conn, now this control request header is pushed into chan
-		log.Info().Msgf("LocalStream ctrl_req pushed ctrlRequestChan")
-	case CTRL_RESP_CONNECTION_ESTABLISHED:
-		resp := CtrlResponse{}
-		if err := json.NewDecoder(&buffer).Decode(&resp); err != nil {
-			log.Fatal().Msgf("failed to read ctrlRequestChan: %v", err)
-		}
-		if tunnelStream := session.getTunnelStream(resp.LocalStreamId); tunnelStream != nil {
-			tunnelStream.ctrlRespChan <- &resp
-			log.Info().Msgf("streamId: %d, ctrl_resp pushed to stream's ctrlRespChan", tunnelStream.Id)
-		} else {
-			log.Error().Msgf("stream %d not found, ctrl_resp is discarded", resp.LocalStreamId)
-		}
-	}
-}
-
-func reconnectAndRewrite(info *Mux, connInfoRev *ConnInfoRev) bool {
-	end := false
-	connInfoRev.transport, connInfoRev.rev, end = info.reconnect("write", connInfoRev.rev)
-	if end {
-		return false
-	}
-	if !rewrite2Tunnel(info, connInfoRev) {
-		return false
-	}
-	return true
 }
 
 func packetEncrypterGR(mux *Mux) {
@@ -663,36 +607,6 @@ func packetEncrypterGR(mux *Mux) {
 
 		session.packetEncChan <- packet
 	}
-}
-
-// write packets to conn, stream ends when boolean returning value is set
-// writer could be a transport writer or a buffer writer
-func writePacketToWriter(pkt *Packet, writer io.Writer, transport *Transport, needToCache bool) (bool, error) {
-	var writeErr error
-	sessionId := transport.Session.Id
-
-	switch pkt.kind {
-	case PACKET_KIND_EOS:
-		log.Debug().Int("sessionId", sessionId).Msgf("eos")
-		return false, nil
-	case PACKET_KIND_SYNC:
-		writeErr = transport.writeSyncPacket(writer, pkt.streamId, pkt.bytes)
-		log.Debug().Int("sessionId", sessionId).Msgf("sync sent")
-	case PACKET_KIND_NORMAL:
-		writeErr = transport.writeNormalPacket(writer, pkt.streamId, pkt.bytes)
-	case PACKET_KIND_NORMAL_DIRECT:
-		writeErr = transport.writeNormalDirectPacket(writer, pkt.streamId, pkt.bytes)
-	case PACKET_KIND_DUMMY:
-		writeErr = transport.writeDummyPacket(writer)
-		needToCache = false
-	default:
-		log.Fatal().Msgf("illegal kind: %d", pkt.kind)
-	}
-
-	if needToCache && writeErr == nil {
-		transport.Session.cacheWritePacket(pkt)
-	}
-	return true, writeErr
 }
 
 func keepaliveGR(mux *Mux, interval int) {
@@ -832,16 +746,11 @@ func NewListenWithMaker(isClient bool, forwardList []Forward, listenMaker func(d
 	return &listenGroup, localForwards
 }
 
-// ListenAndNewConnect waits for a session to pass through Tunnel & connect to the communication destination of the session
-// @param transport Tunnel
-// @param port Listening port number
-// @param parm tunnel information
-// @param reconnect reconnection function
-func ListenAndNewConnect(isClient bool, listenGroup *ListenerGroup, localForwardList []Forward, connInfo *Transport, param *TunnelParam, reconnect func(sessionInfo *Session) *Transport) {
-	ListenAndNewConnectWithDialer(isClient, listenGroup, localForwardList, connInfo, param, reconnect, func(dst string) (io.ReadWriteCloser, error) {
-		log.Info().Msgf("dial %s", dst)
-		return net.Dial("tcp", dst)
-	})
+type DialFn func(dest string) (io.ReadWriteCloser, error)
+
+func defaultTcpDial(dest string) (io.ReadWriteCloser, error) {
+	log.Info().Msgf("dial %s", dest)
+	return net.Dial("tcp", dest)
 }
 
 func ListenAndNewConnectWithDialer(isClient bool, listenerGroup *ListenerGroup, localForwards []Forward, transport *Transport, param *TunnelParam,

@@ -2,14 +2,15 @@ package kptunnel
 
 import (
 	"bytes"
+	"encoding/json"
 	"github.com/rs/zerolog/log"
 	"time"
 )
 
 // Mux controls information that muxMap communication between tunnel and connection destination
 type Mux struct {
-	rev                  int                               // Revision of tunnel conn/transport. Counts up each time reconnection is established.
-	reconnectFunc        func(session *Session) *Transport // give up reconnection when it returns nil (reconnection failed)
+	revision             int                               // Revision of tunnel conn/transport. Counts up each time reconnection is established.
+	reconnectFn          func(session *Session) *Transport // give up reconnection when it returns nil (reconnection failed)
 	shouldEnd            bool                              // true when this Tunnel connection should be terminated
 	exitChan             chan bool                         // Channel for waiting for the shouldEnd of relay processing
 	isConnecting         bool                              // true while reconnecting
@@ -28,7 +29,7 @@ func newMux(transport *Transport, isTunnelStreamServer bool, reconnect func(sess
 	}
 
 	mux = &Mux{
-		reconnectFunc:        reconnect,
+		reconnectFn:          reconnect,
 		transport:            transport,
 		exitChan:             make(chan bool),
 		isTunnelStreamServer: isTunnelStreamServer,
@@ -46,45 +47,43 @@ func (mux *Mux) sendRelease() {
 	}
 }
 
-// 再接続を行なう
-//
-// @param rev 現在のリビジョン
-// @return Transport 再接続後のコネクション
-// @return int 再接続後のリビジョン
-// @return bool セッションを終了するかどうか。終了する場合 true
-func (mux *Mux) reconnect(txt string, rev int) (*Transport, int, bool) {
+// @param revision current revision
+// @return Transport connection after reconnection
+// @return int Revision after reconnection
+// @return bool Whether to terminate the session. true to terminate
+func (mux *Mux) reconnect(rev int) (*Transport, int, bool) {
 	workRev, workConnInfo := mux.getRevAndTransport()
-	sessionInfo := mux.transport.Session
+	session := mux.transport.Session
 
-	sessionInfo.mutex.get("reconnect")
-	sessionInfo.reconnetWaitState++
-	sessionInfo.mutex.rel()
+	session.mutex.get("reconnect")
+	session.reconnetWaitState++
+	session.mutex.rel()
 
-	log.Printf("reconnect -- rev: %s, %d %d, %p", txt, rev, workRev, workConnInfo)
+	log.Printf("tunnel transport reconnecting, revision: %d", rev)
 
 	reqConnect := false
 
 	sub := func() bool {
-		sessionInfo.mutex.get("reconnect-sub")
-		defer sessionInfo.mutex.rel()
+		session.mutex.get("reconnect-sub")
+		defer session.mutex.rel()
 
-		if mux.rev != rev {
+		if mux.revision != rev {
 			if !mux.isConnecting {
-				sessionInfo.reconnetWaitState--
-				workRev = mux.rev
+				session.reconnetWaitState--
+				workRev = mux.revision
 				workConnInfo = mux.transport
 				return true
 			}
 		} else {
 			mux.isConnecting = true
-			mux.rev++
+			mux.revision++
 			reqConnect = true
 			return true
 		}
 		return false
 	}
 
-	if mux.reconnectFunc != nil {
+	if mux.reconnectFn != nil {
 		for {
 			if sub() {
 				break
@@ -94,48 +93,45 @@ func (mux *Mux) reconnect(txt string, rev int) (*Transport, int, bool) {
 		}
 	} else {
 		reqConnect = true
-		mux.rev++
+		mux.revision++
 	}
 
 	if reqConnect {
 		releaseSessionTransport(mux)
 		reverseTunnelPreCloseHook(mux)
 
-		if len(sessionInfo.packetChan) == 0 {
-			// sessionInfo.packetChan 待ちで writeTunnelTransportGR が止まらないように
-			// dummy を投げる。
-			sessionInfo.packetChan <- Packet{kind: PACKET_KIND_DUMMY, streamId: TUNNEL_STREAM_ID_CTRL}
+		if len(session.packetChan) == 0 {
+			// Don't stop writeTunnelTransportGR waiting for session.packetChan, throw dummy.
+			session.packetChan <- Packet{kind: PACKET_KIND_DUMMY, streamId: TUNNEL_STREAM_ID_CTRL}
 		}
 
 		if !mux.shouldEnd {
-			sessionInfo.SetState(Session_state_reconnecting)
+			session.SetState(Session_state_reconnecting)
 
-			workRev = mux.rev
-			workInfo := mux.reconnectFunc(sessionInfo)
+			workRev = mux.revision
+			workInfo := mux.reconnectFn(session)
 			if workInfo != nil {
 				mux.transport = workInfo
 				log.Printf("new transport -- %p", workInfo)
-				sessionInfo.SetState(Session_state_connected)
+				session.SetState(Session_state_connected)
 			} else {
 				mux.shouldEnd = true
-				mux.transport = newTransport(dummyConn, nil, 0, sessionInfo, sessionInfo.isTunnelServer)
+				mux.transport = newTransport(dummyConn, nil, 0, session, session.isTunnelServer)
 				log.Printf("set dummyConn")
 			}
 			workConnInfo = mux.transport
 
 			func() {
-				sessionInfo.mutex.get("reconnectFunc-shouldEnd")
-				defer sessionInfo.mutex.rel()
-				sessionInfo.reconnetWaitState--
+				session.mutex.get("reconnectFn-shouldEnd")
+				defer session.mutex.rel()
+				session.reconnetWaitState--
 			}()
 
 			mux.isConnecting = false
 		}
 	}
 
-	log.Printf(
-		"connected: [%s] rev -- %d, shouldEnd -- %v, %p",
-		txt, workRev, mux.shouldEnd, workConnInfo)
+	log.Printf("reconnection succeeds")
 	return workConnInfo, workRev, mux.shouldEnd
 }
 
@@ -163,7 +159,7 @@ func (mux *Mux) getRevAndTransport() (int, *Transport) {
 	session.mutex.get("getRevAndTransport")
 	defer session.mutex.rel()
 
-	return mux.rev, mux.transport
+	return mux.revision, mux.transport
 }
 
 // tunnel transport => tunnelStream bytesChan
@@ -186,7 +182,7 @@ func readTunnelTransportGR(mux *Mux) {
 
 				log.Info().Msgf("reconnecting tunnel transport ...")
 				end := false
-				tunnelTransport, rev, end = mux.reconnect("read", rev)
+				tunnelTransport, rev, end = mux.reconnect(rev) // tunnel transport, fail to read, try to reconnect
 				if end {
 					log.Info().Msgf("tunnel transport reconnecting ends, quit reading now ...")
 					readSize = 0
@@ -253,6 +249,45 @@ func readTunnelTransportGR(mux *Mux) {
 	mux.exitChan <- true
 }
 
+// parses control packet from binary
+func handleControlPacket(session *Session, payloadBuf []byte) {
+	if len(payloadBuf) == 0 {
+		log.Print("ignore empty buffer 0")
+		return
+	}
+	ctrlHeaderKind := payloadBuf[0]
+	body := payloadBuf[1:]
+
+	var buffer bytes.Buffer
+	buffer.Write(body)
+
+	switch ctrlHeaderKind {
+	case CTRL_REQ_NEW_CONNECTION:
+		header := CtrlRequest{}
+		if err := json.NewDecoder(&buffer).Decode(&header); err != nil {
+			log.Fatal().Err(err).Msgf("fail to parse ctrlRequestChan")
+		}
+		session.ctrl.ctrlRequestChan <- &header // bytes from conn, now this control request header is pushed into chan
+		log.Info().Msgf("LocalStream ctrl_req pushed ctrlRequestChan")
+	case CTRL_RESP_CONNECTION_ESTABLISHED:
+		resp := CtrlResponse{}
+		if err := json.NewDecoder(&buffer).Decode(&resp); err != nil {
+			log.Fatal().Msgf("failed to read ctrlRequestChan: %v", err)
+		}
+		if tunnelStream := session.getTunnelStream(resp.LocalStreamId); tunnelStream != nil {
+			tunnelStream.ctrlRespChan <- &resp
+			log.Info().Msgf("streamId: %d, ctrl_resp pushed to stream's ctrlRespChan", tunnelStream.Id)
+		} else {
+			log.Error().Msgf("stream %d not found, ctrl_resp is discarded", resp.LocalStreamId)
+		}
+	}
+}
+
+type VisionedTransport struct {
+	transport *Transport
+	revision  int
+}
+
 // session packetChan => conn
 func writeTunnelTransportGR(mux *Mux) {
 	session := mux.transport.Session
@@ -262,56 +297,62 @@ func writeTunnelTransportGR(mux *Mux) {
 		packetChan = session.packetEncChan
 	}
 
-	var connInfoRev ConnInfoRev
-	connInfoRev.rev, connInfoRev.transport = mux.getRevAndTransport()
+	var visionedTransport VisionedTransport
+	visionedTransport.revision, visionedTransport.transport = mux.getRevAndTransport() // initialized with mux revision
 
-	var buffer bytes.Buffer
+	// TODO enable this buffer optimization
+	//var buffer bytes.Buffer
 
-collectAndWriteLoop:
+	//collectAndWriteLoop:
 	for {
 		log.Debug().Int("sessionId", sessionId).Msgf("waiting for packet from packetChan ...")
 		packet := <-packetChan
 		log.Debug().Int("sessionId", sessionId).Msgf("got packet from packetChan, %s", packet.String())
 
-		buffer.Reset()
-		// TODO buffer the first packet into `buffer`, so we can remove the last one-packet writing call
-
-		for len(packetChan) > 0 && packet.kind == PACKET_KIND_NORMAL { // there are more NORMAL packet, note if not going into the loop, pkt.bytes are not buffered
-			// packets are buffered, sent in batch
-			if buffer.Len()+len(packet.bytes) > MAX_PACKET_SIZE {
-				break // cannot hold more, have to send now
-			}
-
-			sentPkt := Packet{bytes: packet.bytes, kind: PACKET_KIND_NORMAL_DIRECT, streamId: packet.streamId}
-			streamContinues, err := writePacketToWriter(&sentPkt, &buffer, connInfoRev.transport, true) // bytes written to buffer
-			if err != nil {
-				log.Fatal().Int("sessionId", sessionId).Err(err).Msgf("fail to write to conn")
-			}
-			if !streamContinues {
-				break collectAndWriteLoop
-			}
-
-			packet = <-packetChan // read more
-		}
-
-		if buffer.Len() != 0 {
-			log.Debug().Int("sessionId", sessionId).Msgf("write buffered packets, size: %d ...", buffer.Len())
-			if _, err := connInfoRev.transport.Conn.Write(buffer.Bytes()); err != nil { // use transport to write bytes
-				log.Err(err).Int("sessionId", sessionId).
-					Msgf("tunnel batch writing failed, writeNo: %d", connInfoRev.transport.Session.WriteNo)
-
-				// Batch buffer is encrypted with the cipher before reconnect, so if sent as is, decryption fails on the receiving side.
-				// To avoid that, if batch write fails, recover with rewrite without batch writing.
-				if !reconnectAndRewrite(mux, &connInfoRev) {
-					break
-				}
-			}
-		}
+		//buffer.Reset()
+		//// TODO buffer the first packet into `buffer`, so we can remove the last one-packet writing call
+		//
+		//bufferedPacketCount := 0
+		//for len(packetChan) > 0 && packet.kind == PACKET_KIND_NORMAL { // there are more NORMAL packet, note if not going into the loop, pkt.bytes are not buffered
+		//	log.Debug().Int("sessionId", sessionId).Msgf("buffer more packets")
+		//	// packets are buffered, sent in batch
+		//	if buffer.Len()+len(packet.bytes) > MAX_PACKET_SIZE {
+		//		log.Debug().Int("sessionId", sessionId).Msgf("buffered %d packets, buffer size: %d", bufferedPacketCount, buffer.Len())
+		//		break // cannot hold more, have to send now
+		//	}
+		//
+		//	sentPkt := Packet{bytes: packet.bytes, kind: PACKET_KIND_NORMAL_DIRECT, streamId: packet.streamId}
+		//	streamContinues, err := writePacketToWriter(&sentPkt, &buffer, visionedTransport.transport, true) // bytes written to buffer
+		//	if err != nil {
+		//		log.Fatal().Int("sessionId", sessionId).Err(err).Msgf("fail to write to conn")
+		//	}
+		//	if !streamContinues {
+		//		break collectAndWriteLoop
+		//	}
+		//
+		//	packet = <-packetChan // read more
+		//	bufferedPacketCount += 1
+		//}
+		//
+		//if buffer.Len() != 0 {
+		//	// TODO this buffer is not sent as a packet! HOW does this work?
+		//	log.Debug().Int("sessionId", sessionId).Msgf("write packets buffer, size: %d ...", buffer.Len())
+		//	if _, err := visionedTransport.transport.Conn.Write(buffer.Bytes()); err != nil { // use transport to write bytes
+		//		log.Err(err).Int("sessionId", sessionId).
+		//			Msgf("tunnel batch writing failed, writeNo: %d", visionedTransport.transport.Session.WriteNo)
+		//
+		//		// Batch buffer is encrypted with the cipher before reconnect, so if sent as is, decryption fails on the receiving side.
+		//		// To avoid that, if batch write fails, recover with rewrite without batch writing.
+		//		if !reconnectAndRewrite(mux, &visionedTransport) { // fail to write to tunnel transport, reconnect and write
+		//			break
+		//		}
+		//	}
+		//}
 
 		// in case packet is not buffer into `buffer`
 		// TODO try to remove this call
 		log.Debug().Int("sessionId", sessionId).Msgf("one packet / no buffer write, %s", packet.String())
-		if !writePacketToTransportWithRetry(mux, &packet, &connInfoRev) { // write one packet
+		if !writePacketToTransportWithRetry(mux, &packet, &visionedTransport) { // write one packet
 			break
 		}
 	}
@@ -327,7 +368,7 @@ collectAndWriteLoop:
 // When resending data that has already been sent, resend the data up to just before writeNo.
 // Send data after writeNo using packet data.
 // returns whether continues
-func writePacketToTransportWithRetry(mux *Mux, pkt *Packet, connInfoRev *ConnInfoRev) bool {
+func writePacketToTransportWithRetry(mux *Mux, pkt *Packet, connInfoRev *VisionedTransport) bool {
 	session := connInfoRev.transport.Session
 	for {
 		log.Debug().Int("sessionId", session.Id).Msgf("to write bytes to conn, WriteNo: %d, pkt: %s", session.WriteNo, pkt.String())
@@ -338,10 +379,77 @@ func writePacketToTransportWithRetry(mux *Mux, pkt *Packet, connInfoRev *ConnInf
 		}
 
 		log.Err(err).Msgf("failed to write pkt to transport, writeNo: %d", session.WriteNo)
-		if !reconnectAndRewrite(mux, connInfoRev) {
+		if !reconnectAndRewrite(mux, connInfoRev) { // fail to write single packet to tunnel transport, reconnect and write
 			log.Error().Int("sessionId", session.Id).Msgf("retry failed, writeNo: %d", session.WriteNo)
 			return false
 		}
 		log.Debug().Int("sessionId", session.Id).Msgf("retry to write, writeNo: %d", session.WriteNo)
 	}
+}
+
+func reconnectAndRewrite(mux *Mux, connInfoRev *VisionedTransport) bool {
+	end := false
+	connInfoRev.transport, connInfoRev.revision, end = mux.reconnect(connInfoRev.revision)
+	if end {
+		return false
+	}
+	if !rewrite2Tunnel(mux, connInfoRev) {
+		return false
+	}
+	return true
+}
+
+// resend data to Tunnel
+//
+// @param info pipe info
+// @param transport connection information
+// @param revision revision
+// @return bool true to continue processing
+func rewrite2Tunnel(mux *Mux, connInfoRev *VisionedTransport) bool {
+	// resend packets after reconnection
+	session := connInfoRev.transport.Session
+	if session.RewriteNo == -1 {
+		return true
+	}
+
+	log.Info().Int("sessionId", session.Id).Msgf("rewrite after reconnection, writeNo: %d, rewriteNo: %d", session.WriteNo, session.RewriteNo)
+
+	for session.WriteNo > session.RewriteNo {
+		item := session.WritePackList.Front()
+		if item == nil {
+			log.Fatal().Msgf("packet not found, RewriteNo: %d", session.RewriteNo)
+		}
+
+		for ; item != nil; item = item.Next() {
+			sessionPacket := item.Value.(SessionPacket)
+
+			if sessionPacket.packetNumber == session.RewriteNo { // found a sessionPacket to resend
+				var err error
+
+				streamContinues := true
+				streamContinues, err = writePacketToWriter(&sessionPacket.packet, connInfoRev.transport.Conn, connInfoRev.transport, false)
+				if !streamContinues {
+					return false
+				}
+				if err != nil {
+					end := false
+					_ = connInfoRev.transport.Conn.Close()
+					connInfoRev.transport, connInfoRev.revision, end = mux.reconnect(connInfoRev.revision) // fail to write, reconnect
+					if end {
+						return false
+					}
+				} else {
+					log.Printf("rewrite: %d, %d, %p", session.RewriteNo, sessionPacket.packet.kind, sessionPacket.packet.bytes)
+					if session.WriteNo == session.RewriteNo {
+						session.RewriteNo = -1
+					} else {
+						session.RewriteNo++
+					}
+				}
+				break
+			}
+		}
+
+	}
+	return true
 }

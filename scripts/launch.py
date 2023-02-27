@@ -129,7 +129,7 @@ def launch_wsd(server_host: string, server_port: int, debug=False, mode='wsserve
     log.info('%s WSD %s %s', '-' * 20, datetime.now().isoformat(), '-' * 20)
     dump_watchexec_envs(log)
 
-    log.info('rm wsc, %s', subprocess.run(['rm', 'wsc']))
+    log.info('rm wsc, %s', subprocess.run(['rm', '-rf', 'wsc']))
     subprocess.run(['go', 'build', '-o', 'wsd', 'cmd/websocket_server/main.go'])
     log.info('wsd compiled')
 
@@ -154,7 +154,7 @@ def launch_wsc(server_host, server_port, forward, debug=False, mode='wsclient'):
     log = logging.getLogger('wsc')
     log.info('%s WSC %s %s', '-' * 20, datetime.now().isoformat(), '-' * 20)
 
-    subprocess.run(['rm', 'wsc'])
+    subprocess.run(['rm', '-rf', 'wsc'])
     subprocess.run(['go', 'build', '-o', 'wsc', 'cmd/websocket_client/main.go'])
     log.info('wsc compiled')
 
@@ -211,7 +211,7 @@ def echo_server(port: int, host='localhost'):
         server.serve_forever()
 
 # TODO when max=65535, error happens
-def random_string(min=10, max=1024) -> string:
+def random_string(min=1024 * 1, max=1024 * 4) -> string:
     return ''.join(random.choices(string.printable, k=random.randint(min, max)))
 
 def echo_client(connections: int, rounds: int, ip='localhost', port=2022):
@@ -257,10 +257,10 @@ def echo_client(connections: int, rounds: int, ip='localhost', port=2022):
 
 def test():
     with concurrent.futures.ProcessPoolExecutor() as executor:
-        executor.submit(launch_wsc, server_host='127.0.0.1', server_port=1034, forward=':2022,127.0.0.1:2023')
+        executor.submit(launch_wsc, server_host='127.0.0.1', server_port=1034, forward=':2032,127.0.0.1:2033')
         executor.submit(launch_wsd, server_host='127.0.0.1', server_port=1034)
 #         executor.submit(launch_echo_server, port=2023)
-        executor.submit(echo_server, port=2023)
+        executor.submit(echo_server, port=2033)
         executor.submit(echo_client, connections=5, rounds=7)
         executor.submit(echo_client, connections=1, rounds=20, port=2022)
 

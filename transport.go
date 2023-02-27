@@ -271,62 +271,32 @@ func acceptAndRelayForeverGR(listener LocalListener, session *Session) {
 	}
 }
 
-// resend data to Tunnel
-//
-// @param info pipe info
-// @param transport connection information
-// @param rev revision
-// @return bool true to continue processing
-func rewrite2Tunnel(mux *Mux, connInfoRev *ConnInfoRev) bool {
-	// resend packets after reconnection
-	session := connInfoRev.transport.Session
-	if session.RewriteNo == -1 {
-		return true
+// write packets to conn, stream ends when boolean returning value is set
+// writer could be a transport writer or a buffer writer
+func writePacketToWriter(pkt *Packet, writer io.Writer, transport *Transport, needToCache bool) (bool, error) {
+	var writeErr error
+	sessionId := transport.Session.Id
+
+	switch pkt.kind {
+	case PACKET_KIND_EOS:
+		log.Debug().Int("sessionId", sessionId).Msgf("eos")
+		return false, nil
+	case PACKET_KIND_SYNC:
+		writeErr = transport.writeSyncPacket(writer, pkt.streamId, pkt.bytes)
+		log.Debug().Int("sessionId", sessionId).Msgf("sync sent")
+	case PACKET_KIND_NORMAL:
+		writeErr = transport.writeNormalPacket(writer, pkt.streamId, pkt.bytes)
+	case PACKET_KIND_NORMAL_DIRECT:
+		writeErr = transport.writeNormalDirectPacket(writer, pkt.streamId, pkt.bytes)
+	case PACKET_KIND_DUMMY:
+		writeErr = transport.writeDummyPacket(writer)
+		needToCache = false
+	default:
+		log.Fatal().Msgf("illegal kind: %d", pkt.kind)
 	}
 
-	log.Info().Int("sessionId", session.Id).Msgf("rewrite after reconnection, writeNo: %d, rewriteNo: %d", session.WriteNo, session.RewriteNo)
-
-	for session.WriteNo > session.RewriteNo {
-		item := session.WritePackList.Front()
-		if item == nil {
-			log.Fatal().Msgf("packet not found, RewriteNo: %d", session.RewriteNo)
-		}
-
-		for ; item != nil; item = item.Next() {
-			sessionPacket := item.Value.(SessionPacket)
-
-			if sessionPacket.packetNumber == session.RewriteNo { // found a sessionPacket to resend
-				var err error
-
-				streamContinues := true
-				streamContinues, err = writePacketToWriter(&sessionPacket.packet, connInfoRev.transport.Conn, connInfoRev.transport, false)
-				if !streamContinues {
-					return false
-				}
-				if err != nil {
-					end := false
-					_ = connInfoRev.transport.Conn.Close()
-					connInfoRev.transport, connInfoRev.rev, end = mux.reconnect("rewrite", connInfoRev.rev)
-					if end {
-						return false
-					}
-				} else {
-					log.Printf("rewrite: %d, %d, %p", session.RewriteNo, sessionPacket.packet.kind, sessionPacket.packet.bytes)
-					if session.WriteNo == session.RewriteNo {
-						session.RewriteNo = -1
-					} else {
-						session.RewriteNo++
-					}
-				}
-				break
-			}
-		}
-
+	if needToCache && writeErr == nil {
+		transport.Session.cacheWritePacket(pkt)
 	}
-	return true
-}
-
-type ConnInfoRev struct {
-	transport *Transport
-	rev       int
+	return true, writeErr
 }

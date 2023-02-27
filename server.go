@@ -67,7 +67,7 @@ func StartServer(param *TunnelParam, forwardList []Forward) {
 	for {
 		listenTcpServer(local, param, forwardList, func(connInfo *Transport,
 			listenGroup *ListenerGroup, localForwardList []Forward) {
-			ListenAndNewConnect(false, listenGroup, localForwardList, connInfo, param, getSessionTransport)
+			ListenAndNewConnectWithDialer(false, listenGroup, localForwardList, connInfo, param, lookupTransportBySessionId, defaultTcpDial)
 		})
 	}
 }
@@ -82,7 +82,7 @@ func StartReverseServer(param *TunnelParam, forwardList []Forward) {
 
 	for {
 		listenTcpServer(local, param, forwardList, func(connInfo *Transport, listenGroup *ListenerGroup, localForwardList []Forward) {
-			ListenAndNewConnect(false, listenGroup, localForwardList, connInfo, param, getSessionTransport)
+			ListenAndNewConnectWithDialer(false, listenGroup, localForwardList, connInfo, param, lookupTransportBySessionId, defaultTcpDial)
 		})
 	}
 }
@@ -157,13 +157,13 @@ func execWebSocketServer(param TunnelParam, forwardList []Forward, connectSessio
 
 func StartWebsocketServer(param *TunnelParam, forwardList []Forward) *http.Server {
 	return execWebSocketServer(*param, forwardList, func(connInfo *Transport, tunnelParam *TunnelParam, listenGroup *ListenerGroup, localForwardList []Forward) {
-		ListenAndNewConnect(false, listenGroup, localForwardList, connInfo, tunnelParam, getSessionTransport)
+		ListenAndNewConnectWithDialer(false, listenGroup, localForwardList, connInfo, tunnelParam, lookupTransportBySessionId, defaultTcpDial)
 	})
 }
 
 // StartReverseWebSocketServer create a websocket server
 func StartReverseWebSocketServer(param *TunnelParam, forwardList []Forward) *http.Server {
 	return execWebSocketServer(*param, forwardList, func(connInfo *Transport, tunnelParam *TunnelParam, listenGroup *ListenerGroup, localForwardList []Forward) {
-		ListenAndNewConnect(false, listenGroup, localForwardList, connInfo, tunnelParam, getSessionTransport)
+		ListenAndNewConnectWithDialer(false, listenGroup, localForwardList, connInfo, tunnelParam, lookupTransportBySessionId, defaultTcpDial)
 	})
 }

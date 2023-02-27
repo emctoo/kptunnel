@@ -53,7 +53,8 @@ func StartClient(param *TunnelParam, forwardList []Forward) {
 			_, reconnectInfo := connectTunnel(param.ServerInfo, &sessionParam, forwardList)
 			return reconnectInfo
 		})
-		ListenAndNewConnect(true, listenGroup, localForwardList, reconnectInfo.Conn, &sessionParam, reconnect)
+		// ListenAndNewConnect(true, listenGroup, localForwardList, reconnectInfo.Conn, &sessionParam, reconnect)
+		ListenAndNewConnectWithDialer(true, listenGroup, localForwardList, reconnectInfo.Conn, &sessionParam, reconnect, defaultTcpDial)
 		return true
 	}
 
@@ -80,7 +81,7 @@ func StartReverseClient(param *TunnelParam) {
 			_, reconnectInfo := connectTunnel(param.ServerInfo, &sessionParam, nil)
 			return reconnectInfo
 		})
-		ListenAndNewConnect(true, listenGroup, localForwardList, reconnectInfo.Conn, &sessionParam, reconnect)
+		ListenAndNewConnectWithDialer(true, listenGroup, localForwardList, reconnectInfo.Conn, &sessionParam, reconnect, defaultTcpDial)
 		return true
 	}
 
@@ -132,7 +133,7 @@ func (client *WebsocketClient) Start() {
 		_, reconnectInfo := ConnectWebSocket(reconnectUrl, client.ProxyHost, client.UserAgent, client.TunnelConfig, sessionInfo, client.Forwards)
 		return reconnectInfo
 	})
-	ListenAndNewConnect(true, listenGroup, localForwardList, client.ReconnectInfo.Conn, client.TunnelConfig, reconnect)
+	ListenAndNewConnectWithDialer(true, listenGroup, localForwardList, client.ReconnectInfo.Conn, client.TunnelConfig, reconnect, defaultTcpDial)
 }
 
 func (client *WebsocketClient) Stop() {
@@ -172,7 +173,7 @@ func StartWebSocketClient(userAgent string, param *TunnelParam, serverInfo Host,
 		_, reconnectInfo := ConnectWebSocket(reconnectUrl, proxyHost, userAgent, &sessionParam, sessionInfo, forwardList)
 		return reconnectInfo
 	})
-	ListenAndNewConnect(true, listenGroup, localForwardList, reconnectInfo.Conn, &sessionParam, reconnect)
+	ListenAndNewConnectWithDialer(true, listenGroup, localForwardList, reconnectInfo.Conn, &sessionParam, reconnect, defaultTcpDial)
 }
 
 func StartReverseWebSocketClient(userAgent string, param *TunnelParam, serverInfo Host, proxyHost string) {
@@ -201,7 +202,7 @@ func StartReverseWebSocketClient(userAgent string, param *TunnelParam, serverInf
 		listenGroup, localForwardList := NewListen(true, forwardList)
 		defer listenGroup.Close()
 
-		ListenAndNewConnect(true, listenGroup, localForwardList, reconnectInfo.Conn, &sessionParam, reconnect)
+		ListenAndNewConnectWithDialer(true, listenGroup, localForwardList, reconnectInfo.Conn, &sessionParam, reconnect, defaultTcpDial)
 	}
 	for {
 		process()
