@@ -92,6 +92,11 @@ logging.config.dictConfig({
         }
     },
     'loggers': {
+        'console': {
+                'handlers': ['console'],
+                'propagate': False,
+                'level': 'DEBUG',
+            },
         'echo': {
             'handlers': ['console'],
             'propagate': False,
@@ -123,58 +128,46 @@ def dump_watchexec_envs(log):
         if k.startswith(prefix):
             log.info(f'{k} => {v}')
 
-def launch_wsd(server_host: string, server_port: int, debug=False, mode='wsserver'):
-    log = logging.getLogger('wsd')
 
-    log.info('%s WSD %s %s', '-' * 20, datetime.now().isoformat(), '-' * 20)
+def recompile():
+    log = logging.getLogger('console')
+    log.info('rm kptunnel, %s', subprocess.run(['rm', '-rf', 'kptunnel']))
+    log.info('kptunnel compiled: %s', subprocess.run(['go', 'build']))
+
+
+def launch_command(name, log, cmd):
+    log.info('%s %s %s %s', '-' * 20, name, datetime.now().isoformat(), '-' * 20)
     dump_watchexec_envs(log)
 
-    log.info('rm wsc, %s', subprocess.run(['rm', '-rf', 'wsc']))
-    subprocess.run(['go', 'build', '-o', 'wsd', 'cmd/websocket_server/main.go'])
-    log.info('wsd compiled')
-
-    log.info('listening on :%s', server_port)
-    cmd =  ['./wsd', 'wsserver', f'{server_host}:{server_port}', '-pass', '42', '-encPass', '42']
     with subprocess.Popen(cmd, stdout=subprocess.PIPE) as p:
         for line in p.stdout:
             j = json.loads(line.strip())
             dt, level, caller, message, role, sessionId = (j.get(k) for k in ('time', 'level', 'caller', 'message', 'role', 'sessionId'))
             fn, filename, lineno = caller.split(':')
-#             if fn.startswith('github.com/emctoo/'):
-#                 fn = fn[len('github.com/emctoo/'):]
-#             if fn.startswith('kptunnel.'):
-#                 fn = fn[len('kptunnel.'):]
-#             if fn.startswith('main.'):
-#                 fn = fn[len('main.'):]
             _, fn = fn.rsplit('.', 1)
             if debug:
                 log.info('%-21s %13s %-4s %-32s %-3s %s', dt[11:], filename, lineno, fn, sessionId or '-', message)
 
-def launch_wsc(server_host, server_port, forward, debug=False, mode='wsclient'):
+
+def launch_ws_server(server_host: string, server_port: int, mode='wsserver', debug=False):
+    log = logging.getLogger('wsd')
+    cmd =  ['./kptunnel', 'wsserver', f'{server_host}:{server_port}', '-pass', '42', '-encPass', '42']
+    launch_command('kpt ws client', log, cmd)
+
+def launch_ws_client(server_host, server_port, forward, mode='wsclient', debug=False):
     log = logging.getLogger('wsc')
-    log.info('%s WSC %s %s', '-' * 20, datetime.now().isoformat(), '-' * 20)
+    cmd =  ['./kptunnel', 'wsclient', f'{server_host}:{server_port}', forward, '-pass', '42', '-encPass', '42']
+    launch_command('kpt ws server', log, cmd)
 
-    subprocess.run(['rm', '-rf', 'wsc'])
-    subprocess.run(['go', 'build', '-o', 'wsc', 'cmd/websocket_client/main.go'])
-    log.info('wsc compiled')
+def launch_ws_reverse_server(server_host: string, server_port: int, forwards: [str], mode='r-wsserver', debug=False):
+    log = logging.getLogger('wsd')
+    cmd =  ['./kptunnel', mode, f'{server_host}:{server_port}', *forwards, '-pass', '42', '-encPass', '42']
+    launch_command('kpt ws client', log, cmd)
 
-    log.info('connect to :1034, forward: %s', forward)
-    cmd =  ['./wsc', 'wsclient', f'{server_host}:{server_port}', forward, '-pass', '42', '-encPass', '42']
-    with subprocess.Popen(cmd, stdout=subprocess.PIPE) as p:
-        for line in p.stdout:
-            j = json.loads(line.strip())
-            dt, level, caller, message, role, sessionId = (j.get(k) for k in ('time', 'level', 'caller', 'message', 'role', 'sessionId'))
-            fn, filename, lineno = caller.split(':')
-#             if fn.startswith('github.com/emctoo/'):
-#                 fn = fn[len('github.com/emctoo/'):]
-#             if fn.startswith('kptunnel.'):
-#                 fn = fn[len('kptunnel.'):]
-#             if fn.startswith('main.'):
-#                 fn = fn[len('main.'):]
-            _, fn = fn.rsplit('.', 1)
-            if debug:
-                log.info('%-21s %13s %-4s %-32s %-3s %s', dt[11:], filename, lineno, fn, sessionId or '-', message)
-
+def launch_ws_reverse_client(server_host, server_port, mode='r-wsclient', debug=False):
+    log = logging.getLogger('wsc')
+    cmd =  ['./kptunnel', mode, f'{server_host}:{server_port}', '-pass', '42', '-encPass', '42']
+    launch_command('kpt ws server', log, cmd)
 
 def launch_echo_server(port: int) -> subprocess.Popen:
     log = logging.getLogger('echo')
@@ -255,10 +248,19 @@ def echo_client(connections: int, rounds: int, ip='localhost', port=2022):
 # https://docs.python.org/3/library/socketserver.html
 # https://mathspp.com/blog/til/022
 
+
+def reverse_websocket_ssh():
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        server_fut = executor.submit(launch_ws_reverse_server, server_host='127.0.0.1', server_port=1034, forwards=[':2032,127.0.0.1:22'])
+        client_fut = executor.submit(launch_ws_reverse_client, server_host='127.0.0.1', server_port=1034)
+        subprocess.run(['ssh', 'localhost', '-p', '2032', 'pwd'])
+        subprocess.run(['ssh', 'localhost', '-p', '2032', 'ls -al'])
+        print(server_fut)
+
 def test():
     with concurrent.futures.ProcessPoolExecutor() as executor:
-        executor.submit(launch_wsc, server_host='127.0.0.1', server_port=1034, forward=':2032,127.0.0.1:2033')
-        executor.submit(launch_wsd, server_host='127.0.0.1', server_port=1034)
+        executor.submit(launch_ws_client, server_host='127.0.0.1', server_port=1034, forward=':2032,127.0.0.1:2033')
+        executor.submit(launch_ws_server, server_host='127.0.0.1', server_port=1034)
 #         executor.submit(launch_echo_server, port=2023)
         executor.submit(echo_server, port=2033)
         executor.submit(echo_client, connections=5, rounds=7)
@@ -267,7 +269,7 @@ def test():
 def debug():
     # TODO shutdown gracefully
     with concurrent.futures.ProcessPoolExecutor() as executor:
-        executor.submit(launch_wsc, server_host='127.0.0.1', server_port=1035, forward=':2042,127.0.0.1:2043', debug=True)
+        executor.submit(launch_ws_client, server_host='127.0.0.1', server_port=1035, forward=':2042,127.0.0.1:2043', debug=True)
         executor.submit(launch_wsd, server_host='127.0.0.1', server_port=1035, debug=True)
         executor.submit(launch_echo_server, port=2043)
         executor.submit(echo_client, connections=1, rounds=1, port=2042)
@@ -276,8 +278,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-a', '--action', default='test')
     args = parser.parse_args()
+
+    recompile()
     if args.action == 'test':
-        test()
+        # test()
+        reverse_websocket_ssh()
+
     if args.action == 'debug':
         debug()
 

@@ -161,6 +161,8 @@ def launch_ws_reverse_client(server_host, server_port, forward, debug=False, mod
         for line in p.stdout:
             j = json.loads(line.strip())
             dt, level, caller, message, role, sessionId = (j.get(k) for k in ('time', 'level', 'caller', 'message', 'role', 'sessionId'))
+            if 'bad status' in message:
+                p.kill()
             fn, filename, lineno = caller.split(':')
             _, fn = fn.rsplit('.', 1)
             if debug:
@@ -172,7 +174,9 @@ def main():
     parser.add_argument('-m', '--mode', default='test')
     args = parser.parse_args()
     if args.mode == 'client':
-        launch_ws_reverse_client('34.d1f.xyz', 443, [], debug=True)
+        while True:
+            launch_ws_reverse_client('34.d1f.xyz', 443, [], debug=True)
+            time.sleep(3)
     if args.mode == 'server':
         forwards = [':2222,localhost:2222', ':2223,localhost:2223', ':2224,localhost:2224']
         launch_ws_reverse_server('127.0.0.1', 34022, forwards, debug=True, mode='r-wsserver')
