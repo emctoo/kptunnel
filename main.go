@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -29,7 +30,7 @@ func main() {
 	// UNIX Time is faster and smaller than most timestamps
 	// zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	// zerolog.TimeFieldFormat = time.RFC3339Nano
-	zerolog.TimeFieldFormat = "2006-01-02T15:04:05.999Z07:00"
+	zerolog.TimeFieldFormat = "2006-01-02T15:04:05.999999Z07:00"
 
 	zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	// short filename:lineno format, instead of full path
@@ -42,7 +43,7 @@ func main() {
 			}
 		}
 		file = short
-		return file + ":" + strconv.Itoa(line)
+		return runtime.FuncForPC(pc).Name() + ":" + file + ":" + strconv.Itoa(line)
 	}
 	runLogFile, _ := os.OpenFile("/tmp/t.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0664)
 	multi := zerolog.MultiLevelWriter(os.Stdout, runLogFile)
