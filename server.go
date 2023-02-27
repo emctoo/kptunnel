@@ -25,7 +25,7 @@ func processTcpServer(conn net.Conn, param *TunnelParam, forwardList []Forward, 
 	defer ReleaseClient(remoteAddr)
 
 	tunnelParam := *param
-	connInfo := CreateConnInfo(conn, tunnelParam.EncPass, tunnelParam.EncCount, nil, true)
+	connInfo := newTransport(conn, tunnelParam.EncPass, tunnelParam.EncCount, nil, true)
 	//newSession := false
 	remoteAddrTxt := fmt.Sprintf("%s", conn.RemoteAddr())
 	var retForwardList []Forward
@@ -132,7 +132,7 @@ func execWebSocketServer(param TunnelParam, forwardList []Forward, connectSessio
 	handle := func(ws *websocket.Conn, remoteAddr string) {
 		ws.PayloadType = websocket.BinaryFrame // Set BinaryFrame because we are dealing with binary data
 
-		connInfo := CreateConnInfo(ws, param.EncPass, param.EncCount, nil, true)
+		connInfo := newTransport(ws, param.EncPass, param.EncCount, nil, true)
 		_, retForwardList, err := handleAuthOnServerSide(connInfo, &param, remoteAddr, forwardList)
 		if err != nil {
 			connInfo.Session.SetState(Session_state_authmiss)

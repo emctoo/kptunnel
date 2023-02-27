@@ -106,7 +106,7 @@ func (info *proxyInfo) Dial(network, addr string) (net.Conn, error) {
 }
 
 // ConnectWebSocket connects to the server
-func ConnectWebSocket(websocketUrl, proxyHost, userAgent string, param *TunnelParam, sessionInfo *Session, forwardList []Forward) ([]Forward, ReconnectInfo) {
+func ConnectWebSocket(websocketUrl, proxyHost, userAgent string, param *TunnelParam, session *Session, forwardList []Forward) ([]Forward, ReconnectInfo) {
 	if param.Ctrl == CTRL_STOP {
 		workUrl, _ := url.Parse(websocketUrl)
 		if workUrl.RawQuery != "" {
@@ -156,7 +156,7 @@ func ConnectWebSocket(websocketUrl, proxyHost, userAgent string, param *TunnelPa
 
 	websock.PayloadType = websocket.BinaryFrame // Settings for handling websocket transmission data as binary
 
-	connInfo := CreateConnInfo(websock, param.EncPass, param.EncCount, sessionInfo, false)
+	connInfo := newTransport(websock, param.EncPass, param.EncCount, session, false)
 
 	overrideForwardList := forwardList
 	cont := true

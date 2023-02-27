@@ -24,7 +24,7 @@ func connectTunnel(serverInfo Host, param *TunnelParam, forwardList []Forward) (
 	}
 	log.Print("connected to server")
 
-	connInfo := CreateConnInfo(tunnel, param.EncPass, param.EncCount, nil, false)
+	connInfo := newTransport(tunnel, param.EncPass, param.EncCount, nil, false)
 	overrideForwardList := forwardList
 	cont := true
 	overrideForwardList, cont, err = handleAuthOnClientSide(connInfo, param, forwardList)
