@@ -1038,72 +1038,56 @@ func rewrite2Tunnel(info *pipeInfo, connInfoRev *ConnInfoRev) bool {
 // @param src source
 // @param info pipe info
 func stream2Tunnel(src *ConnInTunnelInfo, info *pipeInfo, fin chan bool) {
-
 	_, connInfo := info.getConn()
-	sessionInfo := connInfo.SessionInfo
+	session := connInfo.SessionInfo
+	packChan := session.packChan
 
-	packChan := sessionInfo.packChan
-
-	end := false
-	for !end {
+	for {
 		src.WriteState = 10
 		if (src.WriteNo % PACKET_NUM_BASE) == 0 {
-			// In order to leave a buffer for retransmission when reconnecting after tunnel disconnection,
-			// get syncChan for every PACKET_NUM_BASE,
+			// In order to leave a buffer for retransmission when reconnecting after tunnel disconnection, get syncChan
+			// for every PACKET_NUM_BASE
 			// Don't send too much when the other party hasn't received it.
 			prev := time.Now()
 			<-src.syncChan
 			span := time.Now().Sub(prev)
 			src.waitTimeInfo.stream2Tunnel += span
-			if IsVerbose() && span >= 5*time.Millisecond {
-				log.Printf(
-					"stream2Tunnel -- %s %s %d",
-					span, src.waitTimeInfo.stream2Tunnel, src.WriteNo)
+			if span >= 5*time.Millisecond {
+				log.Debug().Msgf("sync packet takes %s, writeNo: %d", span, src.WriteNo)
 			}
-			if IsDebug() {
-				log.Printf("obtain sync")
-			}
+			log.Printf("got sync packet from syncChan")
 		}
 		src.WriteNo++
 
 		src.WriteState = 20
+		buf := src.ringBufW.getNext() // switch buffer
+		log.Debug().Msgf("got new buf from write ringBuffer, %p", buf)
+		readSize, readErr := src.conn.Read(buf)
 
-		// switch buffer
-		buf := src.ringBufW.getNext()
-
-		var readSize int
-		var readerr error
-		readSize, readerr = src.conn.Read(buf)
 		src.WriteState = 30
-
-		if IsDebug() {
-			log.Printf("stream2Tunnel -- %d, %s", src.WriteNo, readSize)
-		}
-
-		if readerr != nil {
-			log.Printf("read err log: writeNo=%d, err=%s", sessionInfo.WriteNo, readerr)
-			// write 0 bytes data to the destination when the source is dead
-			packChan <- PackInfo{make([]byte, 0), PACKET_KIND_NORMAL, src.citiId}
+		log.Debug().Msgf("writeNo: %d, readSize: %s", src.WriteNo, readSize)
+		if readErr != nil {
+			packChan <- PackInfo{make([]byte, 0), PACKET_KIND_NORMAL, src.citiId} // write 0 bytes data to the destination when the source is dead
+			log.Error().Msgf("fail to read into write ringBuffer, err %v, session writeNo=%d, err=%s", readErr, session.WriteNo)
 			break
 		}
 		if readSize == 0 {
-			log.Print("ignore 0 size packet.")
+			log.Warn().Msgf("ignore 0-size packet")
 			continue
 		}
 		src.WriteSize += int64(readSize)
 
 		src.WriteState = 40
-
 		if (src.WriteNo%PACKET_NUM_BASE) == 0 && len(src.syncChan) == 0 {
-			// If it's the last packet in the packet group and no SYNC is coming,
-			// Wait for SYNC before sending.
-			work := <-src.syncChan
-			// We read ahead SYNC, so we write back SYNC.
-			src.syncChan <- work
+			log.Info().Msgf("packet group ends, wait for sync packet ...")
+			work := <-src.syncChan // If it's the last packet in the packet group and no SYNC is coming, wait for SYNC before sending.
+			src.syncChan <- work   // We read ahead SYNC, so we write back SYNC.
+			log.Info().Msgf("sync packet pushed")
 		}
-		src.WriteState = 50
 
+		src.WriteState = 50
 		packChan <- PackInfo{buf[:readSize], PACKET_KIND_NORMAL, src.citiId}
+		log.Info().Msgf("buffer packet pushed to packetChan")
 	}
 	fin <- true
 }
@@ -1417,6 +1401,7 @@ func packetWriter(info *pipeInfo) {
 
 		end := false
 		for len(packChan) > 0 && packet.kind == PACKET_KIND_NORMAL {
+			log.Debug().Msgf("buffering packets ...")
 			// If there are still write requests, output them to buffer once and combine them for efficiency.
 
 			if buffer.Len()+len(packet.bytes) > MAX_PACKET_SIZE {
@@ -1441,6 +1426,7 @@ func packetWriter(info *pipeInfo) {
 		sessionInfo.writeState = 30
 
 		if buffer.Len() != 0 {
+			log.Debug().Msgf("packets buffering is done, size: %d, writing to conn ...", buffer.Len())
 			// If data is set in buffer,
 			// write buffer as there is bound data
 			//log.Print( "concat -- ", len( buffer.Bytes() ) )
