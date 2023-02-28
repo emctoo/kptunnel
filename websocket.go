@@ -33,17 +33,17 @@ func StartWebsocketEchoServer() {
 }
 
 type proxyInfo struct {
-	// UA の文字列
+	// UA string
 	userAgent string
-	// proxy サーバの URL
+	// proxy server URL
 	url *url.URL
-	// 接続用の dialer
+	// dialer for connection
 	dialer proxy.Dialer
 
 	tlsConfig *tls.Config
 }
 
-// proxy 経由で addr に接続する
+// connect to addr via proxy
 func (info *proxyInfo) Dial(network, addr string) (net.Conn, error) {
 	log.Print(info.url.Host)
 	conn, err := info.dialer.Dial("tcp", info.url.Host)
@@ -105,7 +105,7 @@ func (info *proxyInfo) Dial(network, addr string) (net.Conn, error) {
 	return conn, nil
 }
 
-// websocketUrl で示すサーバに websocket で接続する
+// Connect with websocket to the server indicated by websocketUrl
 func ConnectWebScoket(
 	websocketUrl, proxyHost, userAgent string,
 	param *TunnelParam, sessionInfo *SessionInfo,
@@ -136,14 +136,14 @@ func ConnectWebScoket(
 	}
 
 	if strings.Index(websocketUrl, "wss") == 0 {
-		// とりあえず tls の検証を skip する
+		// Skip tls verification for now
 		conf.TlsConfig = &tls.Config{
 			InsecureSkipVerify: true,
 		}
 	}
 	var websock *websocket.Conn
 	if proxyHost != "" {
-		// proxy のセッション確立
+		// proxy session establishment
 		url, _ := url.Parse(proxyHost)
 		proxy := proxyInfo{userAgent, url, proxy.Direct, conf.TlsConfig}
 		conn, err := proxy.Dial("", websocketUrl)
@@ -151,7 +151,7 @@ func ConnectWebScoket(
 			log.Print(err)
 			return nil, ReconnectInfo{nil, true, err}
 		}
-		// proxy セッション上に websocket 接続
+		// websocket connection over proxy session
 		websock, err = websocket.NewClient(conf, conn)
 		if err != nil {
 			log.Print("websocket error", websock, err)
@@ -165,7 +165,7 @@ func ConnectWebScoket(
 			return nil, ReconnectInfo{nil, true, err}
 		}
 	}
-	// websocket の送信データを binary で扱う設定
+	// Settings for handling websocket transmission data as binary
 	websock.PayloadType = websocket.BinaryFrame
 	connInfo := CreateConnInfo(
 		websock, param.encPass, param.encCount, sessionInfo, false)

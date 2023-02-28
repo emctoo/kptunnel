@@ -25,25 +25,25 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// 2byte の MAX。
-// ここを 65535 より大きくする場合は、WriteItem, ReadItem の処理を変更する。
+// MAX of 2 bytes.
+// Change the processing of WriteItem and ReadItem if you want to make this larger than 65535.
 const BUFSIZE = 65535
 
-// 接続先情報
+// Destination information
 type HostInfo struct {
-	// スキーム。 http:// など
+	// scheme. http:// etc.
 	Scheme string
-	// ホスト名
+	// hostname
 	Name string
-	// ポート番号
+	// port number
 	Port int
-	// パス
+	// path
 	Path string
 	// query
 	Query string
 }
 
-// 接続先の文字列表現
+// String representation of connection destination
 func (info *HostInfo) toStr() string {
 	work := fmt.Sprintf("%s%s:%d%s", info.Scheme, info.Name, info.Port, info.Path)
 	if info.Query != "" {
@@ -75,24 +75,24 @@ func hostname2HostInfo(name string) *HostInfo {
 	return &HostInfo{"", hostport[0], port, serverUrl.Path, serverUrl.RawQuery}
 }
 
-// パスワードからキーを生成する
+// generate key from password
 func getKey(pass []byte) []byte {
 	sum := sha256.Sum256(pass)
 	return sum[:]
 }
 
-// 暗号化モード
+// encryption mode
 type CryptMode struct {
-	// 暗号化を行なう最大回数。
-	// -1: 無制限
-	//  0: 暗号化なし
-	//  N: 最大暗号化回数 N 回
+	// Maximum number of encryption attempts.
+	// -1: unlimited
+	// 0: no encryption
+	// N: maximum encryption times N
 	countMax int
-	// 現在の暗号化回数
+	// current encryption count
 	count int
-	// 作業用バッファ
+	// working buffer
 	work []byte
-	// 暗号化処理
+	// encryption processing
 	stream cipher.Stream
 }
 type CryptCtrl struct {
@@ -100,10 +100,10 @@ type CryptCtrl struct {
 	dec CryptMode
 }
 
-// 暗号用のオブジェクトを生成する
+// create an object for encryption
 //
-// @param pass パスワード
-// @param count 暗回化回数
+// @param pass password
+// @param count Darkening times
 func CreateCryptCtrl(pass *string, count int) *CryptCtrl {
 	if pass == nil || count == 0 {
 		return nil
@@ -137,17 +137,17 @@ func (mode *CryptMode) IsValid() bool {
 	return true
 }
 
-// 暗号・複合処理
+// Encryption/compound processing
 //
-// @param inbuf 処理対象のデータを保持するバッファ
-// @param outbuf 処理後のデータを格納するバッファ。
+// @param inbuf buffer holding data to be processed
+// @param outbuf Buffer to store data after processing.
 //
-//	nil を指定した場合 CryptMode の work に結果を格納する。
+// If nil is specified, store the result in work of CryptMode.
 //
-// @return 処理後のデータを格納するバッファ。
+// Buffer to store data after @return processing.
 //
-//	outbuf に nil 以外を指定した場合、 outbuf の slice を返す。
-//	outbuf に nil を指定した場合、CryptMode の work の slice を返す。
+// Returns a slice of outbuf if non-nil is specified for outbuf.
+// If nil is specified for outbuf, return a slice of CryptMode's work.
 func (mode *CryptMode) Process(inbuf []byte, outbuf []byte) []byte {
 	work := outbuf
 	if outbuf == nil {
@@ -176,26 +176,26 @@ func (mode *CryptMode) Process(inbuf []byte, outbuf []byte) []byte {
 	return work[:len(inbuf)]
 }
 
-// 暗号化
+// encryption
 func (ctrl *CryptCtrl) Encrypt(bytes []byte) []byte {
 	return ctrl.enc.Process(bytes, nil)
 }
 
-// 複合化
+// Composite
 func (ctrl *CryptCtrl) Decrypt(bytes []byte) []byte {
 	return ctrl.dec.Process(bytes, nil)
 }
 
-// 通常パッケット
+// normal packet
 const PACKET_KIND_NORMAL = 0
 
-// 無通信を避けるためのダミーパケット
+// dummy packet to avoid no communication
 const PACKET_KIND_DUMMY = 1
 
-// packetWriter() の処理終了を通知するためのパケット
+// Packet for notifying the end of packetWriter() processing
 const PACKET_KIND_EOS = 2
 
-// Tunnel の通信を同期するためのパケット
+// Packet for synchronizing Tunnel communication
 const PACKET_KIND_SYNC = 3
 const PACKET_KIND_NORMAL_DIRECT = 4
 
@@ -244,16 +244,16 @@ func WriteSimpleKind(ostream io.Writer, kind int8, citiId uint32, buf []byte) er
 	return err
 }
 
-// データを出力する
+// output data
 //
-// ostream 出力先
-// buf データ
-// ctrl 暗号化情報
+// ostream destination
+// buf data
+// ctrl encryption information
 func WriteItem(
 	ostream io.Writer, citiId uint32,
 	buf []byte, ctrl *CryptCtrl, workBuf *bytes.Buffer) error {
-	// write のコール数が多いと通信効率が悪いので
-	// 一旦バッファに書き込んでから ostream に出力する。
+	// If the number of write calls is large, the communication efficiency is poor.
+	// Write to buffer first and then output to ostream.
 	var buffer *bytes.Buffer = workBuf
 	if buffer == nil {
 		buffer = &bytes.Buffer{}
@@ -273,11 +273,11 @@ func WriteItem(
 	return err
 }
 
-// データを出力する
+// output data
 //
-// ostream 出力先
-// buf データ
-// ctrl 暗号化情報
+// ostream destination
+// buf data
+// ctrl encryption information
 func WriteItemDirect(ostream io.Writer, citiId uint32, buf []byte, ctrl *CryptCtrl) error {
 	if _, err := ostream.Write(normalKindBuf); err != nil {
 		return err
@@ -327,7 +327,7 @@ func ReadPackNo(istream io.Reader, kind int8) (*PackItem, error) {
 }
 
 type CitiBuf interface {
-	// citiId 向けのバッファを取得する
+	// get buffer for citiId
 	GetPacketBuf(citiId uint32, packSize uint16) []byte
 }
 
@@ -340,10 +340,10 @@ func (citiBuf *HeapCitiBuf) GetPacketBuf(citiId uint32, packSize uint16) []byte 
 	return make([]byte, packSize)
 }
 
-// データを読み込む
+// load the data
 //
-// @param istream 読み込み元ストリーム
-// @param ctrl 暗号化制御
+// @param istream source stream
+// @param ctrl encryption control
 // @param workBuf
 func ReadItem(
 	istream io.Reader, ctrl *CryptCtrl,
@@ -393,11 +393,11 @@ func ReadItem(
 			}
 			citiPackBuf = citiBuf.GetPacketBuf(item.citiId, packSize)
 			if ctrl == nil || !ctrl.dec.IsValid() {
-				// 暗号化無しなら packBuf に citiPackBuf を直接入れる
+				// Put citiPackBuf directly into packBuf without encryption
 				packBuf = citiPackBuf
 			} else {
-				// 暗号化ありなら packBuf に workBuf を設定して、
-				// 暗号化後のバッファを citiPackBuf に設定する
+				// If you have encryption, set workBuf in packBuf,
+				// set encrypted buffer to citiPackBuf
 				packBuf = workBuf[:packSize]
 			}
 		}
@@ -415,7 +415,7 @@ func ReadItem(
 	}
 }
 
-// データを読み込む
+// load the data
 func readItemForNormal(istream io.Reader, ctrl *CryptCtrl) (*PackItem, error) {
 	item, err := ReadItem(istream, ctrl, nil, heapCitiBuf)
 	if err != nil {
@@ -427,7 +427,7 @@ func readItemForNormal(istream io.Reader, ctrl *CryptCtrl) (*PackItem, error) {
 	return item, nil
 }
 
-// データを読み込む
+// load the data
 func readItemWithReader(istream io.Reader, ctrl *CryptCtrl) (io.Reader, error) {
 	item, err := readItemForNormal(istream, ctrl)
 	if err != nil {
@@ -479,15 +479,15 @@ func generateChallengeResponse(challenge string, pass *string, hint string) stri
 	return base64.StdEncoding.EncodeToString(sum[:])
 }
 
-// サーバ側のネゴシエーション処理
+// Server-side negotiation process
 //
-// 接続しに来たクライアントの認証を行なう。
+// Authenticate the connecting client.
 //
-// @param connInfo 接続コネクション情報
-// @param param Tunnel情報
-// @param remoteAddr 接続元のアドレス
-// @return bool 新しい session の場合 true
-// @return []ForwardInfo 接続する ForwardInfo リスト
+// @param connInfo connection connection information
+// @param param Tunnel information
+// @param remoteAddr Source address
+// @return bool true if new session
+// @return []ForwardInfo ForwardInfo list to connect
 // @return error
 func ProcessServerAuth(
 	connInfo *ConnInfo, param *TunnelParam,
@@ -503,11 +503,11 @@ func ProcessServerAuth(
 		return false, nil, err
 	}
 
-	// 共通文字列を暗号化して送信することで、
-	// 接続先の暗号パスワードが一致しているかチェック出来るようにデータ送信
+	// By encrypting and sending the common string,
+	// Send data so that you can check if the encryption password of the connection destination matches
 	WriteItem(stream, CITIID_CTRL, []byte(param.magic), connInfo.CryptCtrlObj, nil)
 
-	// challenge 文字列生成
+	// create a challenge string
 	nano := time.Now().UnixNano()
 	sum := sha256.Sum256([]byte(fmt.Sprint("%v", nano)))
 	str := base64.StdEncoding.EncodeToString(sum[:])
@@ -521,7 +521,7 @@ func ProcessServerAuth(
 	log.Print("challenge ", challenge.Challenge)
 	connInfo.SessionInfo.SetState(Session_state_authchallenge)
 
-	// challenge-response 処理
+	// challenge-response processing
 	reader, err := readItemWithReader(stream, connInfo.CryptCtrlObj)
 	if err != nil {
 		return false, nil, err
@@ -533,7 +533,7 @@ func ProcessServerAuth(
 	}
 	if resp.Response != generateChallengeResponse(
 		challenge.Challenge, param.pass, resp.Hint) {
-		// challenge-response が不一致なので、認証失敗
+		// Authentication failed because challenge-response does not match
 		bytes, _ := json.Marshal(AuthResult{"ng", 0, "", 0, 0, nil})
 		if err := WriteItem(
 			stream, CITIID_CTRL, bytes, connInfo.CryptCtrlObj, nil); err != nil {
@@ -543,14 +543,14 @@ func ProcessServerAuth(
 		return false, nil, fmt.Errorf("mismatch password")
 	}
 
-	// ここまででクライアントの認証が成功したので、
-	// これ以降はクライアントが通知してきた情報を受けいれて OK
+	// So far the client has authenticated successfully, so
+	// From now on, accept the information notified by the client and OK
 
-	// クライアントが送ってきた sessionId を取り入れる
+	// Take in the sessionId sent by the client
 	sessionToken := resp.SessionToken
 	newSession := false
 	if sessionToken == "" {
-		// sessionId が "" なら、新規セッション
+		// new session if sessionId is ""
 		connInfo.SessionInfo = NewSessionInfo(true)
 		newSession = true
 	} else {
@@ -572,7 +572,7 @@ func ProcessServerAuth(
 		sessionToken, connInfo.SessionInfo.ReadNo, resp.WriteNo,
 		connInfo.SessionInfo.WriteNo, resp.ReadNo)
 
-	// AuthResult を返す
+	// return AuthResult
 	bytes, _ = json.Marshal(
 		AuthResult{
 			"ok", connInfo.SessionInfo.SessionId, connInfo.SessionInfo.SessionToken,
@@ -591,11 +591,11 @@ func ProcessServerAuth(
 	log.Print("match password")
 	connInfo.SessionInfo.SetState(Session_state_authresult)
 
-	// データ再送のための設定
+	// settings for resending data
 	connInfo.SessionInfo.SetReWrite(resp.ReadNo)
 
 	if resp.Ctrl == CTRL_BENCH {
-		// ベンチマーク
+		// benchmark
 		benchBuf := make([]byte, 100)
 		for count := 0; count < BENCH_LOOP_COUNT; count++ {
 			if _, err := ReadItem(
@@ -616,29 +616,29 @@ func ProcessServerAuth(
 
 	SetSessionConn(connInfo)
 	// if !newSession {
-	//     // 新規セッションでない場合、既にセッションが処理中なので、
-	//     // そのセッションでコネクションが close されるのを待つ
-	//     JoinUntilToCloseConn( stream )
+	// // If it's not a new session, we already have a session in progress, so
+	// // Wait for the session to close the connection
+	// JoinUntilToCloseConn( stream )
 	// }
 
 	return newSession, forwardList, nil
 }
 
 func CorrectLackOffsetWrite(stream io.Writer) error {
-	// proxy 経由の websocket だと、
-	// 最初のデータが欠けることがある。
-	// proxy サーバの影響か、 websocket の実装上の問題か？
-	// proxy サーバの問題な気がするが。。
-	// WriteItem() を使うと、データ長とデータがペアで送信されるが、
-	// データが欠けることでデータ長とデータに不整合が発生し、
-	// 存在しないデータ長を読みこもうとして、タイムアウトするまで戻ってこない。
-	// そこで、最初のデータにどれだけズレがあるかを確認するための
-	// バイト列を出力する。
-	// 0x00 〜 0x09 を2回出力する。
+	// websocket via proxy,
+	// Sometimes the first data is missing.
+	// Impact of proxy server or websocket implementation problem?
+	// I think it's a proxy server problem. .
+	// When using WriteItem(), data length and data are sent as a pair, but
+	// Lack of data causes inconsistency between data length and data,
+	// Attempting to read a nonexistent data length and not returning until timeout.
+	// So, to check how much the first data is off
+	// Output bytes.
+	// Output 0x00 to 0x09 twice.
 	bytes := make([]byte, 1)
 	for subIndex := 0; subIndex < 2; subIndex++ {
 		for index := 0; index < 10; index++ {
-			// stream の write ごとに欠けるようなので、1 バイトづつ出力する
+			// Output 1 byte at a time because it seems to be missing for each write of stream
 			bytes[0] = byte(index)
 			if _, err := stream.Write(bytes); err != nil {
 				return err
@@ -649,13 +649,13 @@ func CorrectLackOffsetWrite(stream io.Writer) error {
 }
 
 func CorrectLackOffsetRead(stream io.Reader) error {
-	// proxy 経由の websocket だと、
-	// 最初のデータが正常に送信されないことがある。
-	// ここで、最初のデータにどれだけズレがあるかを確認する。
+	// websocket via proxy,
+	// Sometimes the first data is not sent successfully.
+	// Now check how much the first data is off.
 
-	// 0x00 〜 0x09 までのバイト列が 2 回あるので、
-	// 最初に 10 バイト読み込み、
-	// 読み込めた値を見てズレを確認する
+	// Since there are two bytes from 0x00 to 0x09,
+	// read 10 bytes first,
+	// load	Check the deviation by looking at the calculated value
 	buf := make([]byte, 10)
 	if _, err := io.ReadFull(stream, buf); err != nil {
 		return err
@@ -667,7 +667,7 @@ func CorrectLackOffsetRead(stream io.Reader) error {
 		return fmt.Errorf("illegal num -- %d", offset)
 	}
 
-	// ズレ量に応じて残りのデータを読み込む
+	// read the remaining data according to the amount of deviation
 	if _, err := io.ReadFull(stream, buf[:10-offset]); err != nil {
 		return err
 	}
@@ -681,14 +681,14 @@ func CorrectLackOffsetRead(stream io.Reader) error {
 	return nil
 }
 
-// サーバとのネゴシエーションを行なう
+// negotiate with the server
 //
-// クライアントの認証に必要や手続と、再接続時のセッション情報などをやり取りする
+// # Exchanging necessary and procedures for client authentication and session information for reconnection
 //
-// @param connInfo コネクション。再接続時はセッション情報をセットしておく。
+// @param connInfo connection. Set the session information when reconnecting.
 // @param param TunnelParam
-// @return bool エラー時に、処理を継続するかどうか。true の場合継続する。
-// @return error エラー
+// @return bool Whether to continue processing on error. Continue if true.
+// @return error error
 func ProcessClientAuth(
 	connInfo *ConnInfo, param *TunnelParam,
 	forwardList []ForwardInfo) ([]ForwardInfo, bool, error) {
@@ -714,7 +714,7 @@ func ProcessClientAuth(
 	}
 	log.Print("read challenge")
 
-	// challenge を読み込み、認証用パスワードから response を生成する
+	// Read challenge and generate response from authentication password
 	var reader io.Reader
 	reader, err = readItemWithReader(stream, connInfo.CryptCtrlObj)
 	if err != nil {
@@ -725,7 +725,7 @@ func ProcessClientAuth(
 		return nil, true, err
 	}
 	log.Print("challenge ", challenge.Challenge)
-	// サーバ側のモードを確認して、不整合がないかチェックする
+	// Check server-side mode to check for inconsistencies
 	switch challenge.Mode {
 	case "server":
 		if param.Mode != "client" && param.Mode != "wsclient" {
@@ -745,7 +745,7 @@ func ProcessClientAuth(
 		}
 	}
 
-	// response を生成
+	// generate response
 	nano := time.Now().UnixNano()
 	sum := sha256.Sum256([]byte(fmt.Sprint("%v", nano)))
 	hint := base64.StdEncoding.EncodeToString(sum[:])
@@ -763,7 +763,7 @@ func ProcessClientAuth(
 
 	var result AuthResult
 	{
-		// AuthResult を取得する
+		// get AuthResult
 		log.Print("read auth result")
 		reader, err := readItemWithReader(stream, connInfo.CryptCtrlObj)
 		if err != nil {
@@ -779,9 +779,9 @@ func ProcessClientAuth(
 		log.Printf("received forwardList -- %v", result.ForwardList)
 		if result.ForwardList != nil && len(result.ForwardList) > 0 {
 			if forwardList != nil {
-				// クライアントが指定している ForwardList と、
-				// サーバ側が指定している ForwardList に違いがあるか調べて、
-				// 違う場合は警告を出力する。
+				// The ForwardList specified by the client, and
+				// Check if there is a difference in the ForwardList specified by the server,
+				// Output a warning if not.
 				orgMap := map[string]bool{}
 				for _, forwardInfo := range forwardList {
 					orgMap[forwardInfo.toStr()] = true
@@ -811,7 +811,7 @@ func ProcessClientAuth(
 		}
 
 		if param.ctrl == CTRL_BENCH {
-			// ベンチマーク
+			// benchmark
 			benchBuf := make([]byte, 100)
 			prev := time.Now()
 			for count := 0; count < BENCH_LOOP_COUNT; count++ {
@@ -834,7 +834,7 @@ func ProcessClientAuth(
 
 		if result.SessionId != connInfo.SessionInfo.SessionId {
 			if connInfo.SessionInfo.SessionId == 0 {
-				// 新規接続だった場合、セッション情報を更新する
+				// If it is a new connection, update the session information
 				//connInfo.SessionInfo.SessionId = result.SessionId
 				connInfo.SessionInfo.UpdateSessionId(
 					result.SessionId, result.SessionToken)

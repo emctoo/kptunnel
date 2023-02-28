@@ -213,10 +213,10 @@ type WrapWSHandler struct {
 	param  *TunnelParam
 }
 
-// Http ハンドラ
+// Http handler
 func (handler WrapWSHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
-	// 接続元の確認
+	// Check connection source
 	if err := AcceptClient(req.RemoteAddr, handler.param); err != nil {
 		log.Printf("reject -- %s", err)
 		w.WriteHeader(http.StatusNotAcceptable)
@@ -229,14 +229,14 @@ func (handler WrapWSHandler) ServeHTTP(w http.ResponseWriter, req *http.Request)
 	log.Printf("accept -- %v", req)
 
 	wrap := func(ws *websocket.Conn) {
-		// WrapWSHandler のハンドラを実行する
+		// Run WrapWSHandler's handler
 		handler.handle(ws, req.RemoteAddr)
 	}
 
-	// Http Request の WebSocket サーバ処理生成。
-	// wrap を実行するように生成する。
+	// WebSocket server processing generation of Http Request.
+	// Generate to run wrap.
 	wshandler := websocket.Handler(wrap)
-	// WebSocket サーバハンドル処理。
+	// WebSocket server handle handling.
 	wshandler.ServeHTTP(w, req)
 
 	log.Printf("exit -- %v", req)
@@ -246,9 +246,9 @@ func execWebSocketServer(
 	param TunnelParam, forwardList []ForwardInfo,
 	connectSession func(*ConnInfo, *TunnelParam, *ListenGroup, []ForwardInfo)) {
 
-	// WebSocket 接続時のハンドラ
+	// Handler for WebSocket connection
 	handle := func(ws *websocket.Conn, remoteAddr string) {
-		// binary データを扱うので BinaryFrame をセット
+		// Set BinaryFrame because we are dealing with binary data
 		ws.PayloadType = websocket.BinaryFrame
 
 		connInfo := CreateConnInfo(ws, param.encPass, param.encCount, nil, true)

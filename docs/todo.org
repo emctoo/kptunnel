@@ -1,4 +1,4 @@
-# -*- coding:utf-8 -*-
+# -*- coding: utf-8 -*-
 #+AUTHOR: ifritJP
 #+STARTUP: nofold
 #+OPTIONS: ^:{}
@@ -7,41 +7,41 @@
 #+TITLE: TODO
 
 
-- [ ] PRE_ENC を有効にすると、再接続の通信復帰が正常に行なえない。
-  - packetEncrypter() で暗号化している CryptCtrlObj と、
-    再送信後の CryptCtrlObj が別モノになっているので、
-    復号が正常に行なえない。
-    再送信後の CryptCtrlObj を同じものを使う必要がある。
+- [ ] When PRE_ENC is enabled, reconnection communication recovery cannot be performed normally.
+   - CryptCtrlObj encrypted with packetEncrypter() and
+     Since CryptCtrlObj after resending is a different thing,
+     Decryption cannot be performed normally.
+     You need to use the same CryptCtrlObj after resending.
 
-- [ ] tunnel の console で、端末間のチャットをサポートする
-- [ ] 認証後に console を open できるようにする
-- [ ] tunnel を張った後、 セッションを開始しないでタイムアウトすると、
-      使用中のポートを listen しようとしてエラー
-- [ ] dst の接続失敗した時に終了しないようにする
-- [ ] 制御用コンソールを作成する
-- [ ] 通信量をリアルタイムで確認できるコンソールを用意する
-- [ ] 認証処理にタイムアウトをセットする。
-      - [ ] 認証処理後は interval の値を考慮してタイムアウトを設定する
-- [ ] reconnect にタイムアウトを追加する
-- [ ] signal を受けたら connection を停止させる 
+- [ ] tunnel console to support inter-terminal chat
+- [ ] Allow to open console after authentication
+- After setting [ ] tunnel, if you timeout without starting a session,
+       Error trying to listen on port in use
+- [ ] Don't exit when dst fails to connect
+- [ ] Create a control console
+- [ ] Prepare a console that allows you to check traffic in real time
+- [ ] Set timeout for authentication process.
+       - [ ] After authentication processing, set the timeout considering the value of interval
+- [ ] Add timeout to reconnect
+- [ ] Stop connection when signal is received
 
-- [X] 存在しない sessionId の接続要請が来た場合、 reject する
-- [X] close 時に、パケット数と、結合したパケット数も出力する
-- [X] dst のホストをクライアントから指定できるようにする。
-      - [X] サーバ側で固定に出来るようにする。
-- [X] 相手がパケットを受信して SYNC を送信するまでの間に、
-      相手が制限 MAX までのパケットを送信していると、
-      相手が送信している SYNC が受けられなくなる。
-- [X] 再送の対象が NORMAL だけ。
-      他のパケットも再送しないと矛盾が発生する。
-      特に SYNC は再送しないと、 同期制御が崩れて動かなくなる。
-- [X] channel 待ちしていると停止できない。
-- [X] reconnect 中の dummy パケットは無視する
-- [X] 同時にネゴシエーション可能な数を制限する
-- [X] ネゴシエーション進捗のログを出す
-- [X] reconnect する際に、 リトライせずに EOF で終ってしまうことがある。
-- [X] dst のホスト port をコマンドラインで指定する
-- [X] 接続元 IP ごとにセッション数を確認して、セッション数が既定値を越えたら、
-      認証エラーにする
-      IP の確認と同時に行なう。
-- [X] 通信速度を測るモードを作る
+- [X] Reject connection request with non-existing sessionId
+- [X] On close, print the number of packets and also the number of combined packets
+- [X] Allow client to specify dst host.
+       - [X] Make it possible to fix it on the server side.
+-[X] Between receiving the packet and sending her SYNC,
+       If the other party is sending packets up to the limit MAX,
+       Her SYNC sent by the other party cannot be received.
+-[X] Only her NORMAL is resent.
+       A contradiction occurs if the other packets are not resent as well.
+       In particular, if he doesn't resend the SYNC, the synchronization control will collapse and it won't work.
+- Can't stop when waiting for [X] channel.
+- [X] Ignore dummy packets during reconnect
+- [X] Limit number of simultaneous negotiations
+- [X] Log negotiation progress
+-[X] When reconnecting, he can end up with EOF without retrying.
+- [X] specify the host port of dst on the command line
+- [X] Check the number of sessions for each source IP, and if the number of sessions exceeds the default value,
+       get authentication error
+       Do this at the same time as confirming the IP.
+- [X] Create a mode to measure communication speed

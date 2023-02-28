@@ -73,7 +73,7 @@ func AcceptClient(remoteAddr string, param *TunnelParam) error {
 	ipTxt := remoteIP.String()
 
 	if param.maskedIP != nil {
-		// 接続元のアドレスをチェックする
+		// check source address
 		if !param.maskedIP.inRange(remoteIP) {
 			return fmt.Errorf("unmatch ip -- %s", ipTxt)
 		}

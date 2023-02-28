@@ -48,13 +48,13 @@ func IsDebug() bool {
 	return debugFlag
 }
 
-// tunnel 上に通す tcp の組み合わせ
+// combination of tcp to pass over tunnel
 type ForwardInfo struct {
-	// これが reverse tunnel の場合 true
+	// true if this is a reverse tunnel
 	IsReverseTunnel bool
-	// listen する host:port
+	// listening host:port
 	Src HostInfo
-	// forward する相手の host:port
+	// forward host:port
 	Dst HostInfo
 }
 
@@ -66,41 +66,41 @@ func (info *ForwardInfo) toStr() string {
 	return fmt.Sprint("%s:%s:%s", kind, info.Src.toStr(), info.Dst.toStr())
 }
 
-// tunnel の制御パラメータ
+// tunnel control parameters
 type TunnelParam struct {
-	// セッションの認証用共通パスワード
+	// common password for session authentication
 	pass *string
-	// セッションのモード
+	// session mode
 	Mode string
-	// 接続可能な IP パターン。
-	// nil の場合、 IP 制限しない。
+	// Connectable IP patterns.
+	// If nil, no IP restrictions.
 	maskedIP *MaskIP
-	// セッションの通信を暗号化するパスワード
+	// Password to encrypt session communication
 	encPass *string
-	// セッションの通信を暗号化する通信数。
-	// -1: 常に暗号化
-	//  0: 暗号化しない
-	//  N: 残り N 回の通信を暗号化する
+	// The communication number to encrypt the communication of the session.
+	// -1: always encrypted
+	// 0: no encryption
+	// N: Encrypt the remaining N communications
 	encCount int
-	// 無通信を避けるための接続確認の間隔 (ミリ秒)
+	// Interval between connection checks to avoid idleness (ms)
 	keepAliveInterval int
 	// magic
 	magic []byte
 	// CTRL_*
 	ctrl int
-	// サーバ情報
+	// server information
 	serverInfo HostInfo
-	// websocket のリクエストヘッダに付加する情報
+	// Information to add to websocket request headers
 	wsReqHeader http.Header
 }
 
-// セッションの再接続時に、
-// 再送信するためのデータを保持しておくパケット数
+// when reconnecting the session,
+// number of packets to keep data for retransmission
 const PACKET_NUM_BASE = 30
 const PACKET_NUM_DIV = 2
 const PACKET_NUM = (PACKET_NUM_DIV * PACKET_NUM_BASE)
 
-// 書き込みを結合する最大サイズ
+// maximum size to combine writes
 const MAX_PACKET_SIZE = 10 * 1024
 
 const CITIID_CTRL = 0
@@ -109,7 +109,7 @@ const CITIID_USR = 1
 const CTRL_HEADER = 0
 const CTRL_RESP_HEADER = 1
 
-// 再接続後の CryptCtrlObj を同じものを使えるようにするまで true には出来ない
+// Can't be true until CryptCtrlObj after reconnection can be used again
 const PRE_ENC = false
 
 type DummyConn struct {
@@ -174,19 +174,19 @@ type ConnInTunnelInfo struct {
 	readPackChan chan []byte
 	end          bool
 
-	// フロー制御用 channel
+	// channel for flow control
 	syncChan chan bool
 
-	// WritePackList に送り直すパケットを保持するため、
-	// パケットのバッファをリンクで保持しておく。
-	// write 用バッファ。
+	// to hold packets resent to WritePackList,
+	// Keep packet buffers in the link.
+	// Buffer for write.
 	ringBufW *RingBuf
-	// Read 用バッファ。
+	// Buffer for Read.
 	ringBufR *RingBuf
 
-	// このセッションで read したパケットの数
+	// number of packets read in this session
 	ReadNo int64
-	// このセッションで write したパケットの数
+	// number of packets written in this session
 	WriteNo   int64
 	ReadSize  int64
 	WriteSize int64
@@ -215,35 +215,35 @@ type WaitTimeInfo struct {
 	packetReader  time.Duration
 }
 
-// セッションの情報
+// session information
 type SessionInfo struct {
-	// セッションを識別する ID
+	// ID that identifies the session
 	SessionId    int
 	SessionToken string
 
-	// packet 書き込み用 channel
+	// channel for packet writing
 	packChan    chan PackInfo
 	packChanEnc chan PackInfo
 
-	// pipe から読み取ったサイズ
+	// size read from pipe
 	readSize int64
-	// pipe に書き込んだサイズ
+	// size written to pipe
 	wroteSize int64
 
 	citiId2Info map[uint32]*ConnInTunnelInfo
 	nextCtitId  uint32
 
-	// このセッションで read したパケットの数
+	// number of packets read in this session
 	ReadNo int64
-	// このセッションで write したパケットの数
+	// number of packets written in this session
 	WriteNo int64
 
-	// 送信した SessionPacket のリスト。
-	// 直近 PACKET_NUM 分の SessionPacket を保持する。
+	// List of SessionPackets sent.
+	// Retain SessionPackets for the latest PACKET_NUM.
 	WritePackList *list.List
 
-	// 送り直すパケット番号。
-	// -1 の場合は送り直しは無し。
+	// Packet number to resend.
+	// -1 means no resending.
 	ReWriteNo int64
 
 	ctrlInfo CtrlInfo
@@ -260,13 +260,13 @@ type SessionInfo struct {
 	readState  int
 	writeState int
 
-	// reconnet を待っている状態。
-	// 0: 待ち無し, 1: read or write どちらかで待ち,  2: read/write 両方で待ち
+	// Waiting for reconnet.
+	// 0: no wait, 1: wait for either read or write, 2: wait for both read/write
 	reconnetWaitState int
 
 	releaseChan chan bool
 
-	// この構造体のメンバアクセス排他用 mutex
+	// mutex for member access exclusion of this structure
 	mutex *Lock
 }
 
@@ -481,7 +481,7 @@ func (info *SessionInfo) delCiti(citi *ConnInTunnelInfo) {
 	log.Printf(
 		"delCiti -- %d %d %d", info.SessionId, citi.citiId, len(info.citiId2Info))
 
-	// 詰まれているデータを読み捨てる
+	// discard stuffed data
 	log.Printf("delCiti discard readPackChan -- %d", len(citi.readPackChan))
 	for len(citi.readPackChan) > 0 {
 		<-citi.readPackChan
@@ -497,24 +497,24 @@ func (info *SessionInfo) hasCiti() bool {
 	return len(info.citiId2Info) > CITIID_USR
 }
 
-// コネクション情報
+// connection information
 type ConnInfo struct {
-	// コネクション
+	// connection
 	Conn io.ReadWriteCloser
-	// 暗号化情報
+	// encryption information
 	CryptCtrlObj *CryptCtrl
-	// セッション情報
+	// session information
 	SessionInfo *SessionInfo
 	writeBuffer bytes.Buffer
 }
 
-// ConnInfo の生成
+// Generate ConnInfo
 //
-// @param conn コネクション
-// @param pass 暗号化パスワード
-// @param count 暗号化回数
-// @param sessionInfo セッション情報
-// @return ConnInfo
+// @param conn connection
+// @param pass encrypted password
+// @param count encryption count
+// @param sessionInfo session information
+// @returnConnInfo
 func CreateConnInfo(
 	conn io.ReadWriteCloser, pass *string, count int,
 	sessionInfo *SessionInfo, isTunnelServer bool) *ConnInfo {
@@ -525,37 +525,37 @@ func CreateConnInfo(
 		conn, CreateCryptCtrl(pass, count), sessionInfo, bytes.Buffer{}}
 }
 
-// 再送信パケット番号の送信
+// send resent packet number
 //
-// @param readNo 接続先の読み込み済みパケット No
+// @param readNo Read packet number of connection destination
 func (sessionInfo *SessionInfo) SetReWrite(readNo int64) {
 	if sessionInfo.WriteNo > readNo {
-		// こちらが送信したパケット数よりも相手が受け取ったパケット数が少ない場合、
-		// パケットを再送信する。
+		// If the number of packets received by the other party is less than the number of packets we sent,
+		// resend the packet.
 		sessionInfo.ReWriteNo = readNo
 	} else if sessionInfo.WriteNo == readNo {
-		// こちらが送信したパケット数と、相手が受け取ったパケット数が一致する場合、
-		// 再送信はなし。
+		// If the number of packets we sent matches the number of packets received by the other party,
+		// no resend.
 		sessionInfo.ReWriteNo = -1
 	} else {
-		// こちらが送信したパケット数よりも相手が受け取ったパケット数が多い場合、
-		// そんなことはありえないのでエラー
+		// If the number of packets received by the other party is more than the number of packets we sent,
+		// error because that's not possible
 		log.Fatal().Msg("mismatch WriteNo")
 	}
 }
 
-// セッション管理
+// session management
 type sessionManager struct {
-	// sessionID -> SessionInfo のマップ
+	// map of sessionID -> SessionInfo
 	sessionToken2info map[string]*SessionInfo
-	// sessionID -> ConnInfo のマップ
+	// map of sessionID -> ConnInfo
 	sessionId2conn map[int]*ConnInfo
-	// sessionID -> pipeInfo のマップ
+	// map of sessionID -> pipeInfo
 	sessionId2pipe map[int]*pipeInfo
-	// コネクションでのセッションが有効化どうかを判断するためのマップ。
-	// channel を使った方がスマートに出来そうな気がする。。
+	// A map to determine if sessions on the connection are enabled.
+	// I feel like it could be smarter to use channel. .
 	conn2alive map[io.ReadWriteCloser]bool
-	// sessionManager 内の値にアクセスする際の mutex
+	// mutex when accessing values in sessionManager
 	mutex Lock
 }
 
@@ -566,7 +566,7 @@ var sessionMgr = sessionManager{
 	map[io.ReadWriteCloser]bool{},
 	Lock{}}
 
-// 指定のコネクションをセッション管理に登録する
+// Register the specified connection in session management
 func SetSessionConn(connInfo *ConnInfo) {
 	sessionId := connInfo.SessionInfo.SessionId
 	log.Print("SetSessionConn: sessionId -- ", sessionId)
@@ -577,7 +577,7 @@ func SetSessionConn(connInfo *ConnInfo) {
 	sessionMgr.conn2alive[connInfo.Conn] = true
 }
 
-// 指定のセッション token  に紐付けられた SessionInfo を取得する
+// Get SessionInfo associated with the specified session token
 func GetSessionInfo(token string) (*SessionInfo, bool) {
 	sessionMgr.mutex.get("GetSessionInfo")
 	defer sessionMgr.mutex.rel()
@@ -586,7 +586,7 @@ func GetSessionInfo(token string) (*SessionInfo, bool) {
 	return sessionInfo, has
 }
 
-// 指定のコネクションの通信が終わるのを待つ
+// wait for communication of the specified connection to end
 func JoinUntilToCloseConn(conn io.ReadWriteCloser) {
 	log.Printf("join start -- %v\n", conn)
 
@@ -609,32 +609,32 @@ func JoinUntilToCloseConn(conn io.ReadWriteCloser) {
 	log.Printf("join end -- %v\n", conn)
 }
 
-// pipe 情報。
+// pipe information.
 //
-// tunnel と接続先との通信を中継する制御情報
+// Control information that relays communication between tunnel and connection destination
 type pipeInfo struct {
-	// connInfo のリビジョン。 再接続確立毎にカウントアップする。
+	// Revision of connInfo. Counts up each time reconnection is established.
 	rev int
-	// 再接続用関数
+	// reconnect function
 	//
-	// @param sessionInfo セッション情報
-	// @return *ConnInfo 接続したコネクション。
-	//     再接続できない場合は nil。
-	//     再接続のリトライは、この関数内で行なう。
-	//     この関数で nil を返すと、再接続を諦める。
+	// @param sessionInfo session information
+	// @return *ConnInfo Connected connection.
+	// nil if unable to reconnect.
+	// Retry reconnection in this function.
+	// If this function returns nil, give up reconnection.
 	reconnectFunc func(sessionInfo *SessionInfo) *ConnInfo
-	// この Tunnel 接続を終了するべき時に true
+	// true when this Tunnel connection should be terminated
 	end bool
-	// // 中継処理終了待合せ用 channel
+	// // Channel for waiting for the end of relay processing
 	// fin chan bool
-	// 再接続中は true
+	// true while reconnecting
 	connecting bool
-	// pipe を繋ぐコネクション情報
+	// Connection information connecting pipe
 	connInfo    *ConnInfo
 	fin         chan bool
 	reconnected chan bool
 
-	// citi が server の場合 true
+	// true if citi is server
 	citServerFlag bool
 }
 
@@ -648,16 +648,16 @@ func (info *pipeInfo) sendRelease() {
 }
 
 type PackInfo struct {
-	// 書き込みデータ
+	// write data
 	bytes []byte
 	// PACKET_KIND_*
 	kind   int8
 	citiId uint32
 }
 
-// セッションで書き込んだデータを保持する
+// hold the data written in the session
 type SessionPacket struct {
-	// パケット番号
+	// packet number
 	no   int64
 	pack PackInfo
 }
@@ -677,13 +677,13 @@ func (sessionInfo *SessionInfo) postWriteData(packInfo *PackInfo) {
 	sessionInfo.wroteSize += int64(len(packInfo.bytes))
 }
 
-// コネクションへのデータ書き込み
+// write data to connection
 //
-// ここで、書き込んだデータを WritePackList に保持する。
+// Here, save the written data in WritePackList.
 //
-// @param info コネクション
-// @param bytes 書き込みデータ
-// @return error 失敗した場合 error
+// @param info connection
+// @param bytes write data
+// @return error on failure error
 func (info *ConnInfo) writeData(stream io.Writer, citiId uint32, bytes []byte) error {
 	if !PRE_ENC {
 		if err := WriteItem(
@@ -712,11 +712,11 @@ func (info *ConnInfo) writeDataDirect(stream io.Writer, citiId uint32, bytes []b
 	return nil
 }
 
-// コネクションからのデータ読み込み
+// read data from connection
 //
-// @param info コネクション
-// @param work 作業用バッファ
-// @return error 失敗した場合 error
+// @param info connection
+// @param work work buffer
+// @return error on failure error
 func (info *ConnInfo) readData(work []byte) (*PackItem, error) {
 	var item *PackItem
 	var err error
@@ -738,14 +738,14 @@ func (info *ConnInfo) readData(work []byte) (*PackItem, error) {
 			if IsDebug() {
 				log.Printf("get sync -- %d", packNo)
 			}
-			// 相手が受けとったら syncChan を更新して、送信処理を進められるように設定
+			// When the other party receives it, update syncChan and set it so that the sending process can proceed
 			if citi := info.SessionInfo.getCiti(item.citiId); citi != nil {
 				citi.syncChan <- true
 			} else {
 				log.Print("readData discard -- ", item.citiId)
 			}
 		default:
-			// 読み飛す。
+			// Skip.
 			//log.Print( "skip kind -- ", kind )
 		}
 	}
@@ -753,12 +753,12 @@ func (info *ConnInfo) readData(work []byte) (*PackItem, error) {
 	return item, nil
 }
 
-// 再接続を行なう
+// reconnect
 //
-// @param rev 現在のリビジョン
-// @return ConnInfo 再接続後のコネクション
-// @return int 再接続後のリビジョン
-// @return bool セッションを終了するかどうか。終了する場合 true
+// @param rev current revision
+// @return ConnInfo Connection after reconnection
+// @return int Revision after reconnection
+// @return bool Whether to terminate the session. true to terminate
 func (info *pipeInfo) reconnect(txt string, rev int) (*ConnInfo, int, bool) {
 
 	workRev, workConnInfo := info.getConn()
@@ -810,8 +810,8 @@ func (info *pipeInfo) reconnect(txt string, rev int) (*ConnInfo, int, bool) {
 		prepareClose(info)
 
 		if len(sessionInfo.packChan) == 0 {
-			// sessionInfo.packChan 待ちで packetWriter が止まらないように
-			// dummy を投げる。
+			// Don't let packetWriter stop waiting for sessionInfo.packChan
+			// Throw dummy.
 			sessionInfo.packChan <- PackInfo{nil, PACKET_KIND_DUMMY, CITIID_CTRL}
 		}
 
@@ -848,7 +848,7 @@ func (info *pipeInfo) reconnect(txt string, rev int) (*ConnInfo, int, bool) {
 	return workConnInfo, workRev, info.end
 }
 
-// セッションのコネクションを開放する
+// release session connection
 func releaseSessionConn(info *pipeInfo) {
 	connInfo := info.connInfo
 	log.Printf("releaseSessionConn -- %d", connInfo.SessionInfo.SessionId)
@@ -863,7 +863,7 @@ func releaseSessionConn(info *pipeInfo) {
 	info.sendRelease()
 }
 
-// 指定のセッションに対応するコネクションを取得する
+// get the connection corresponding to the specified session
 func GetSessionConn(sessionInfo *SessionInfo) *ConnInfo {
 	sessionId := sessionInfo.SessionId
 	log.Print("GetSessionConn ... session: ", sessionId)
@@ -883,15 +883,15 @@ func GetSessionConn(sessionInfo *SessionInfo) *ConnInfo {
 			return connInfo
 		}
 		// if !sessionInfo.hasCiti() {
-		//     log.Print( "GetSessionConn ng ... session: ", sessionId )
-		//     return nil
+		// log.Print( "GetSessionConn ng ... session: ", sessionId )
+		// return nil
 		// }
 
 		time.Sleep(500 * time.Millisecond)
 	}
 }
 
-// 指定のセッションに対応するコネクションを取得する
+// get the connection corresponding to the specified session
 func WaitPauseSession(sessionInfo *SessionInfo) bool {
 	log.Print("WaitPauseSession start ... session: ", sessionInfo.SessionId)
 	sub := func() bool {
@@ -910,10 +910,10 @@ func WaitPauseSession(sessionInfo *SessionInfo) bool {
 	}
 }
 
-// コネクション情報を取得する
+// get connection information
 //
-// @return int リビジョン情報
-// @return *ConnInfo コネクション情報
+// @return int revision information
+// @return *ConnInfo connection information
 func (info *pipeInfo) getConn() (int, *ConnInfo) {
 	sessionInfo := info.connInfo.SessionInfo
 	sessionInfo.mutex.get("getConn")
@@ -922,12 +922,12 @@ func (info *pipeInfo) getConn() (int, *ConnInfo) {
 	return info.rev, info.connInfo
 }
 
-// Tunnel -> dst の pipe を処理する。
+// Handle Tunnel -> dst pipe.
 //
-// 処理終了後は info.fin にデータを書き込む。
+// After processing, write data to info.fin.
 //
-// @param info pipe 情報
-// @param dst 送信先
+// @param info pipe info
+// @param dst destination
 func tunnel2Stream(sessionInfo *SessionInfo, dst *ConnInTunnelInfo, fin chan bool) {
 
 	for {
@@ -947,7 +947,7 @@ func tunnel2Stream(sessionInfo *SessionInfo, dst *ConnInTunnelInfo, fin chan boo
 		}
 
 		if (dst.ReadNo % PACKET_NUM_BASE) == PACKET_NUM_BASE-1 {
-			// 一定数読み込んだら SYNC を返す
+			// Return SYNC after reading a certain number
 			var buffer bytes.Buffer
 			binary.Write(&buffer, binary.BigEndian, dst.ReadNo)
 			dst.ReadState = 30
@@ -972,31 +972,31 @@ func tunnel2Stream(sessionInfo *SessionInfo, dst *ConnInTunnelInfo, fin chan boo
 		}
 	}
 
-	// dst.readPackChan にデータが詰まれないように削除する
+	// Remove data from dst.readPackChan to prevent stuffing
 	sessionInfo.delCiti(dst)
 	fin <- true
 }
 
-// Tunnel へデータの再送を行なう
+// resend data to Tunnel
 //
-// @param info pipe 情報
-// @param connInfo コネクション情報
-// @param rev リビジョン
-// @return bool 処理を続ける場合 true
-func rewirte2Tunnel(info *pipeInfo, connInfoRev *ConnInfoRev) bool {
-	// 再接続後にパケットの再送を行なう
+// @param info pipe info
+// @param connInfo connection information
+// @param rev revision
+// @return bool true to continue processing
+func rewrite2Tunnel(info *pipeInfo, connInfoRev *ConnInfoRev) bool {
+	// resend packets after reconnection
 	sessionInfo := connInfoRev.connInfo.SessionInfo
 	if sessionInfo.ReWriteNo == -1 {
 		return true
 	}
 	log.Printf(
-		"rewirte2Tunnel: %d, %d", sessionInfo.WriteNo, sessionInfo.ReWriteNo)
+		"rewrite2Tunnel: %d, %d", sessionInfo.WriteNo, sessionInfo.ReWriteNo)
 	for sessionInfo.WriteNo > sessionInfo.ReWriteNo {
 		item := sessionInfo.WritePackList.Front()
 		for ; item != nil; item = item.Next() {
 			packet := item.Value.(SessionPacket)
 			if packet.no == sessionInfo.ReWriteNo {
-				// 再送対象の packet が見つかった
+				// The packet to be resent was found
 				var err error
 
 				cont := true
@@ -1033,10 +1033,10 @@ func rewirte2Tunnel(info *pipeInfo, connInfoRev *ConnInfoRev) bool {
 	return true
 }
 
-// src -> tunnel の通信の中継処理を行なう
+// Do relay processing for src -> tunnel communication
 //
-// @param src 送信元
-// @param info pipe 情報
+// @param src source
+// @param info pipe info
 func stream2Tunnel(src *ConnInTunnelInfo, info *pipeInfo, fin chan bool) {
 
 	_, connInfo := info.getConn()
@@ -1048,9 +1048,9 @@ func stream2Tunnel(src *ConnInTunnelInfo, info *pipeInfo, fin chan bool) {
 	for !end {
 		src.WriteState = 10
 		if (src.WriteNo % PACKET_NUM_BASE) == 0 {
-			// tunnel 切断復帰の再接続時の再送信用バッファを残しておくため、
-			// PACKET_NUM_BASE 毎に syncChan を取得し、
-			// 相手が受信していないのに送信し過ぎないようにする。
+			// In order to leave a buffer for retransmission when reconnecting after tunnel disconnection,
+			// get syncChan for every PACKET_NUM_BASE,
+			// Don't send too much when the other party hasn't received it.
 			prev := time.Now()
 			<-src.syncChan
 			span := time.Now().Sub(prev)
@@ -1068,7 +1068,7 @@ func stream2Tunnel(src *ConnInTunnelInfo, info *pipeInfo, fin chan bool) {
 
 		src.WriteState = 20
 
-		// バッファの切り替え
+		// switch buffer
 		buf := src.ringBufW.getNext()
 
 		var readSize int
@@ -1082,7 +1082,7 @@ func stream2Tunnel(src *ConnInTunnelInfo, info *pipeInfo, fin chan bool) {
 
 		if readerr != nil {
 			log.Printf("read err log: writeNo=%d, err=%s", sessionInfo.WriteNo, readerr)
-			// 入力元が切れたら、転送先に 0 バイトデータを書き込む
+			// write 0 bytes data to the destination when the source is dead
 			packChan <- PackInfo{make([]byte, 0), PACKET_KIND_NORMAL, src.citiId}
 			break
 		}
@@ -1095,10 +1095,10 @@ func stream2Tunnel(src *ConnInTunnelInfo, info *pipeInfo, fin chan bool) {
 		src.WriteState = 40
 
 		if (src.WriteNo%PACKET_NUM_BASE) == 0 && len(src.syncChan) == 0 {
-			// パケットグループの最後のパケットで、SYNC が来ていない場合は、
-			// 送信前に SYNC を待つ。
+			// If it's the last packet in the packet group and no SYNC is coming,
+			// Wait for SYNC before sending.
 			work := <-src.syncChan
-			// SYNC の先読みしたので、SYNC を書き戻す。
+			// We read ahead SYNC, so we write back SYNC.
 			src.syncChan <- work
 		}
 		src.WriteState = 50
@@ -1177,16 +1177,16 @@ func packetReader(info *pipeInfo) {
 				}
 				if packet.citiId == CITIID_CTRL {
 					bin2Ctrl(sessionInfo, packet.buf)
-					// 処理が終わらないように、ダミーで readSize を 1 にセット
+					// Dummy set readSize to 1 so that the process doesn't end
 					readSize = 1
 				} else {
 					if citi = sessionInfo.getCiti(packet.citiId); citi != nil {
-						// packet.buf は citi.readPackChan に
-						// 入れて別スレッドで処理される。
-						// 一方で packet.buf は、固定アドレスを参照するため、
-						// 別スレッドで処理される前に readData すると packet.buf の内容が
-						// 上書きされてしまう。
-						// それを防ぐため copy する。
+						// packet.buf to citi.readPackChan
+						// put in and processed in another thread.
+						// On the other hand, packet.buf refers to a fixed address, so
+						// If you readData before processing in another thread, the contents of packet.buf
+						// will be overwritten.
+						// Copy to prevent it.
 
 						// cloneBuf := citi.ringBufR.getNext()[:len(packet.buf)]
 						// copy( cloneBuf, packet.buf )
@@ -1222,8 +1222,8 @@ func packetReader(info *pipeInfo) {
 
 		if readSize == 0 {
 			if citi != nil && len(citi.syncChan) == 0 {
-				// 終了する際に、 stream2Tunnel() 側が待ちになっている可能性があるので
-				// ここで syncChan を通知してやる
+				// When exiting, stream2Tunnel() may be waiting
+				// Notify syncChan here
 				citi.syncChan <- true
 			}
 			sessionInfo.readState = 50
@@ -1231,8 +1231,8 @@ func packetReader(info *pipeInfo) {
 				info.sendRelease()
 				for _, workciti := range sessionInfo.citiId2Info {
 					if len(workciti.syncChan) == 0 {
-						// 終了する際に、 stream2Tunnel() 側が待ちになっている可能性があるので
-						// ここで syncChan を通知してやる
+						// When exiting, stream2Tunnel() may be waiting
+						// Notify syncChan here
 						workciti.syncChan <- true
 					}
 				}
@@ -1256,22 +1256,22 @@ func reconnectAndRewrite(
 	if end {
 		return false
 	}
-	if !rewirte2Tunnel(info, connInfoRev) {
+	if !rewrite2Tunnel(info, connInfoRev) {
 		return false
 	}
 	return true
 }
 
-// packet を connInfoRev に書き込む。
+// Write packet to connInfoRev.
 //
-// 書き込みに失敗した場合は、 reconnect と再送信を行なう。
-// 再送する際は、送信相手の ReadNo との不整合を解決するために、
-// 送信済みのデータの再送信も行なう。
-// 送信済みのデータの再送信を行なう場合、 writeNo の直前までのデータを再送する。
-// writeNo 以降のデータは、 packet のデータを使用して送信する。
-// @param info pipe情報
-// @param packet 送信するデータ
-// @param connInfoRev コネクション情報
+// If the write fails, reconnect and resend.
+// When resending, to resolve the inconsistency with her ReadNo of the sending party,
+// Also resend data that has already been sent.
+// When resending data that has already been sent, resend the data up to just before writeNo.
+// Send data after writeNo using packet data.
+// @param info pipe information
+// @param packet data to send
+// @param connInfoRev connection information
 func packetWriterSub(
 	info *pipeInfo, packet *PackInfo, connInfoRev *ConnInfoRev) bool {
 
@@ -1338,14 +1338,14 @@ func packetEncrypter(info *pipeInfo) {
 	}
 }
 
-// packet を stream に出力する
+// output packet to stream
 //
-// @param packet パケット
-// @param stream 送信先
-// @param connInfo コネクション
-// @param validPost postWriteData処理をコールする場合 true
-// @return bool 送信を続ける場合 true
-// @return error 送信失敗した場合の error
+// @param packet packet
+// @param stream destination
+// @param connInfo connection
+// true when calling @param validPost postWriteData processing
+// @return bool true to continue sending
+// @return error error when sending failed
 func writePack(
 	packet *PackInfo, stream io.Writer,
 	connInfo *ConnInfo, validPost bool) (bool, error) {
@@ -1377,12 +1377,12 @@ func writePack(
 	return true, writeerr
 }
 
-// Tunnel へのパケット書き込み関数
+// Packet write function to Tunnel
 //
-// go routine で実行される
+// # Executed by go routine
 //
-// @param info pipe制御情報
-// @param packChan PackInfo を受けとる channel
+// @param info pipe control information
+// channel to receive @param packChan PackInfo
 func packetWriter(info *pipeInfo) {
 
 	sessionInfo := info.connInfo.SessionInfo
@@ -1417,7 +1417,7 @@ func packetWriter(info *pipeInfo) {
 
 		end := false
 		for len(packChan) > 0 && packet.kind == PACKET_KIND_NORMAL {
-			// 書き込み依頼が残っている場合、効率化のため一旦 buffer に出力して結合する。
+			// If there are still write requests, output them to buffer once and combine them for efficiency.
 
 			if buffer.Len()+len(packet.bytes) > MAX_PACKET_SIZE {
 				break
@@ -1441,17 +1441,17 @@ func packetWriter(info *pipeInfo) {
 		sessionInfo.writeState = 30
 
 		if buffer.Len() != 0 {
-			// buffer にデータがセットされていれば、
-			// 結合データがあるので buffer を書き込む
+			// If data is set in buffer,
+			// write buffer as there is bound data
 			//log.Print( "concat -- ", len( buffer.Bytes() ) )
 			if _, err := connInfoRev.connInfo.Conn.Write(buffer.Bytes()); err != nil {
 				log.Printf(
 					"tunnel batch write err log: %p, writeNo=%d, err=%s",
 					connInfoRev.connInfo, connInfoRev.connInfo.SessionInfo.WriteNo, err)
-				// batch の buffer は、reconnect 前の暗号で暗号化しているため、
-				// そのまま送信すると受信側で decrypt に失敗する。
-				// それを回避するため batch 書き込みに失敗した場合、
-				// batch 書き込みはせずに rewrite でリカバリする。
+				// Batch buffer is encrypted with the cipher before reconnect, so
+				// If sent as is, decryption fails on the receiving side.
+				// To avoid that, if batch write fails,
+				// Recover with rewrite without batch writing.
 				if !reconnectAndRewrite(info, &connInfoRev) {
 					break
 				}
@@ -1513,7 +1513,7 @@ func startRelaySession(
 	sessionInfo := connInfo.SessionInfo
 
 	keepalive := func() {
-		// 一定時間の無通信で切断されないように、 20 秒に一回
+		// Once every 20 seconds to avoid disconnection due to no communication for a certain period of time
 		for !info.end {
 			for sleepTime := 0; sleepTime < interval; sleepTime += SLEEP_INTERVAL {
 				time.Sleep(SLEEP_INTERVAL * time.Millisecond)
@@ -1532,19 +1532,19 @@ func startRelaySession(
 	return info
 }
 
-// 無通信を避けるため keep alive 用通信を行なう間隔 (ミリ秒)
+// Interval for keep alive communication to avoid dead communication (ms)
 const KEEP_ALIVE_INTERVAL = 20 * 1000
 
-// keep alive の時間経過を確認する間隔 (ミリ秒)。
-// これが長いと、 relaySession の後処理の待ち時間がかかる。
-// 短いと、負荷がかかる。
+// Interval in milliseconds to check for keep alive time elapsed.
+// If this is long, it takes time to wait for relaySession post-processing.
+// If it's short, it'll be heavy.
 const SLEEP_INTERVAL = 500
 
-// tunnel で トンネリングされている中で、 local と tunnel の通信を中継する
+// Relay communication between local and tunnel while being tunneled by tunnel
 //
-// @param connInfo Tunnel のコネクション情報
-// @param local Tunnel との接続先
-// @param reconnect 再接続関数
+// @param connInfo Tunnel connection information
+// Connection destination with @param local Tunnel
+// @param reconnect reconnection function
 func relaySession(info *pipeInfo, citi *ConnInTunnelInfo, hostInfo HostInfo) {
 	log.Print("connected")
 
@@ -1577,17 +1577,17 @@ func relaySession(info *pipeInfo, citi *ConnInTunnelInfo, hostInfo HostInfo) {
 	// sessionInfo.packChan <- PackInfo { nil, PACKET_KIND_EOS, CITIID_CTRL } // pending
 }
 
-// 再接続情報
+// reconnection information
 type ReconnectInfo struct {
-	// 再接続後のコネクション情報
+	// Connection information after reconnection
 	Conn *ConnInfo
-	// エラー時、再接続の処理を継続するかどうか。継続する場合 true。
+	// Whether to continue the reconnection process when an error occurs. true to continue;
 	Cont bool
-	// 再接続でエラーした際のエラー
+	// Error when reconnection error
 	Err error
 }
 
-// 再接続をリトライする関数を返す
+// return a function to retry reconnection
 func CreateToReconnectFunc(reconnect func(sessionInfo *SessionInfo) ReconnectInfo) func(sessionInfo *SessionInfo) *ConnInfo {
 	return func(sessionInfo *SessionInfo) *ConnInfo {
 		timeList := []time.Duration{
@@ -1741,12 +1741,12 @@ func ListenNewConnectSub(
 	}
 }
 
-// Tunnel 上に通すセッションを待ち受け & セッションの通信先と接続する
+// Wait for a session to pass through Tunnel & connect to the communication destination of the session
 //
 // @param connInfo Tunnel
-// @param port 待ち受けるポート番号
-// @param parm トンネル情報
-// @param reconnect 再接続関数
+// @param port Listening port number
+// @param parm tunnel information
+// @param reconnect reconnection function
 func ListenAndNewConnect(
 	isClient bool,
 	listenGroup *ListenGroup, localForwardList []ForwardInfo,
@@ -1803,12 +1803,12 @@ func ListenAndNewConnectWithDialer(
 	connInfo.SessionInfo.SetState(Session_state_disconnected)
 }
 
-// Tunnel 上に通すセッションを待ち受け、開始されたセッションを処理する。
+// Listen for sessions to pass over the Tunnel and handle started sessions.
 //
 // @param connInfo Tunnel
-// @param port 待ち受けるポート番号
-// @param parm トンネル情報
-// @param reconnect 再接続関数
+// @param port Listening port number
+// @param parm tunnel information
+// @param reconnect reconnection function
 func ListenNewConnect(
 	listenGroup *ListenGroup, connInfo *ConnInfo, param *TunnelParam, loop bool,
 	reconnect func(sessionInfo *SessionInfo) *ConnInfo) {
@@ -1880,7 +1880,7 @@ func prepareClose(info *pipeInfo) {
 			count := len(sessionInfo.ctrlInfo.waitHeaderCount)
 			log.Print("packetReader: put dummy header -- ", count)
 			for index := 0; index < count; index++ {
-				// connection 待ちで止まらないように ダミーを送信
+				// send a dummy to avoid waiting for connection
 				sessionInfo.ctrlInfo.header <- nil
 			}
 			time.Sleep(100 * time.Millisecond)
