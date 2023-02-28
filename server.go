@@ -226,7 +226,7 @@ func (handler WrapWSHandler) ServeHTTP(w http.ResponseWriter, req *http.Request)
 	}
 	defer ReleaseClient(req.RemoteAddr)
 
-	log.Printf("accept -- %v", req)
+	log.Printf("accept websocket request %s", req.URL)
 
 	wrap := func(ws *websocket.Conn) {
 		// Run WrapWSHandler's handler
