@@ -109,7 +109,7 @@ func (info *proxyInfo) Dial(network, addr string) (net.Conn, error) {
 func ConnectWebScoket(
 	websocketUrl, proxyHost, userAgent string,
 	param *TunnelParam, sessionInfo *SessionInfo,
-	forwardList []ForwardInfo) ([]ForwardInfo, ReconnectInfo) {
+	forwardList []Forward) ([]Forward, ReconnectInfo) {
 	// websocketUrl := "ws://localhost:12345/echo"
 	// proxyHost := "http://localhost:10080"
 	// userAgent := "test"

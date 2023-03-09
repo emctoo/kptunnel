@@ -44,7 +44,7 @@ type HostInfo struct {
 }
 
 // String representation of connection destination
-func (info *HostInfo) toStr() string {
+func (info *HostInfo) String() string {
 	work := fmt.Sprintf("%s%s:%d%s", info.Scheme, info.Name, info.Port, info.Path)
 	if info.Query != "" {
 		work = fmt.Sprintf("%s?%s", work, info.Query)
@@ -58,18 +58,18 @@ func hostname2HostInfo(name string) *HostInfo {
 	}
 	serverUrl, err := url.Parse(name)
 	if err != nil {
-		fmt.Printf("%s\n", err)
+		fmt.Printf("%s", err)
 		return nil
 	}
 	hostport := strings.Split(serverUrl.Host, ":")
 	if len(hostport) != 2 {
-		fmt.Printf("illegal pattern. set 'hoge.com:1234' -- %s\n", name)
+		fmt.Printf("illegal pattern. set 'hoge.com:1234' -- %s", name)
 		return nil
 	}
 	var port int
 	port, err2 := strconv.Atoi(hostport[1])
 	if err2 != nil {
-		fmt.Printf("%s\n", err2)
+		fmt.Printf("%s", err2)
 		return nil
 	}
 	return &HostInfo{"", hostport[0], port, serverUrl.Path, serverUrl.RawQuery}
@@ -461,7 +461,7 @@ type AuthResponse struct {
 	WriteNo      int64
 	ReadNo       int64
 	Ctrl         int
-	ForwardList  []ForwardInfo
+	ForwardList  []Forward
 }
 
 // server -> client
@@ -471,7 +471,7 @@ type AuthResult struct {
 	SessionToken string
 	WriteNo      int64
 	ReadNo       int64
-	ForwardList  []ForwardInfo
+	ForwardList  []Forward
 }
 
 func generateChallengeResponse(challenge string, pass *string, hint string) string {
@@ -487,11 +487,11 @@ func generateChallengeResponse(challenge string, pass *string, hint string) stri
 // @param param Tunnel information
 // @param remoteAddr Source address
 // @return bool true if new session
-// @return []ForwardInfo ForwardInfo list to connect
+// @return []Forward Forward list to connect
 // @return error
 func ProcessServerAuth(
 	connInfo *ConnInfo, param *TunnelParam,
-	remoteAddr string, forwardList []ForwardInfo) (bool, []ForwardInfo, error) {
+	remoteAddr string, forwardList []Forward) (bool, []Forward, error) {
 
 	stream := connInfo.Conn
 	log.Print("start auth")
@@ -660,9 +660,9 @@ func CorrectLackOffsetRead(stream io.Reader) error {
 	if _, err := io.ReadFull(stream, buf); err != nil {
 		return err
 	}
-	log.Printf("num: %x\n", buf)
+	log.Printf("num: %x", buf)
 	offset := int(buf[0])
-	log.Printf("offset: %d\n", offset)
+	log.Printf("offset: %d", offset)
 	if offset >= 10 {
 		return fmt.Errorf("illegal num -- %d", offset)
 	}
@@ -671,7 +671,7 @@ func CorrectLackOffsetRead(stream io.Reader) error {
 	if _, err := io.ReadFull(stream, buf[:10-offset]); err != nil {
 		return err
 	}
-	log.Printf("num2: %x\n", buf)
+	log.Printf("num2: %x", buf)
 	for index := 0; index < 10-offset; index++ {
 		if int(buf[index]) != offset+index {
 			return fmt.Errorf(
@@ -691,7 +691,7 @@ func CorrectLackOffsetRead(stream io.Reader) error {
 // @return error error
 func ProcessClientAuth(
 	connInfo *ConnInfo, param *TunnelParam,
-	forwardList []ForwardInfo) ([]ForwardInfo, bool, error) {
+	forwardList []Forward) ([]Forward, bool, error) {
 
 	log.Print("start auth")
 
@@ -784,11 +784,11 @@ func ProcessClientAuth(
 				// Output a warning if not.
 				orgMap := map[string]bool{}
 				for _, forwardInfo := range forwardList {
-					orgMap[forwardInfo.toStr()] = true
+					orgMap[forwardInfo.String()] = true
 				}
 				newMap := map[string]bool{}
 				for _, forwardInfo := range result.ForwardList {
-					newMap[forwardInfo.toStr()] = true
+					newMap[forwardInfo.String()] = true
 				}
 				diff := false
 				if len(orgMap) != len(newMap) {

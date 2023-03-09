@@ -129,10 +129,10 @@ def dump_watchexec_envs(log):
             log.info(f'{k} => {v}')
 
 
-def recompile():
+def recompile(exe: str = 'kptunnel'):
     log = logging.getLogger('console')
-    log.info('rm kptunnel, %s', subprocess.run(['rm', '-rf', 'kptunnel']))
-    log.info('kptunnel compiled: %s', subprocess.run(['go', 'build']))
+    log.info('rm %s, %s', exe, subprocess.run(['rm', '-rf', exe]))
+    log.info('%s compiled: %s', exe, subprocess.run(['go', 'build', '-o', exe]))
 
 
 def launch_command(name, log, cmd):
@@ -146,18 +146,20 @@ def launch_command(name, log, cmd):
             fn, filename, lineno = caller.split(':')
             _, fn = fn.rsplit('.', 1)
             if debug:
-                log.info('%-21s %13s %-4s %-32s %-3s %s', dt[11:], filename, lineno, fn, sessionId or '-', message)
+                log.info('%-33s %13s %-4s %-32s %-3s %s', dt, filename, lineno, fn, sessionId or '-', message)
 
 
-def launch_ws_server(server_host: string, server_port: int, mode='wsserver', debug=False):
+def launch_ws_server(exe, server_host: string, server_port: int, mode='wsserver', debug=False):
     log = logging.getLogger('wsd')
-    cmd =  ['./kptunnel', 'wsserver', f'{server_host}:{server_port}', '-pass', '42', '-encPass', '42']
-    launch_command('kpt ws client', log, cmd)
+    cmd =  [f'./{exe}', 'wsserver', f'{server_host}:{server_port}', '-pass', '42', '-encPass', '42']
+    launch_command(f'{exe} ws client', log, cmd)
 
-def launch_ws_client(server_host, server_port, forward, mode='wsclient', debug=False):
+def launch_ws_client(exe, server_host, server_port, forward, mode='wsclient', debug=False):
+    time.sleep(2)
+
     log = logging.getLogger('wsc')
-    cmd =  ['./kptunnel', 'wsclient', f'{server_host}:{server_port}', forward, '-pass', '42', '-encPass', '42']
-    launch_command('kpt ws server', log, cmd)
+    cmd =  [f'./{exe}', 'wsclient', f'{server_host}:{server_port}', forward, '-pass', '42', '-encPass', '42']
+    launch_command(f'{exe} ws server', log, cmd)
 
 def launch_ws_reverse_server(server_host: string, server_port: int, forwards: [str], mode='r-wsserver', debug=False):
     log = logging.getLogger('wsd')
@@ -259,8 +261,8 @@ def reverse_websocket_ssh():
 
 def test():
     with concurrent.futures.ProcessPoolExecutor() as executor:
-        executor.submit(launch_ws_client, server_host='127.0.0.1', server_port=1034, forward=':2032,127.0.0.1:2033')
-        executor.submit(launch_ws_server, server_host='127.0.0.1', server_port=1034)
+        executor.submit(launch_ws_client, exe='kpt-text', server_host='127.0.0.1', server_port=1034, forward=':2032,127.0.0.1:2033')
+        executor.submit(launch_ws_server, exe='kpt-text', server_host='127.0.0.1', server_port=1034)
 #         executor.submit(launch_echo_server, port=2023)
         executor.submit(echo_server, port=2033)
         executor.submit(echo_client, connections=5, rounds=7)
@@ -269,8 +271,8 @@ def test():
 def debug():
     # TODO shutdown gracefully
     with concurrent.futures.ProcessPoolExecutor() as executor:
-        executor.submit(launch_ws_client, server_host='127.0.0.1', server_port=1035, forward=':2042,127.0.0.1:2043', debug=True)
-        executor.submit(launch_wsd, server_host='127.0.0.1', server_port=1035, debug=True)
+        executor.submit(launch_ws_server, exe='kpt', server_host='127.0.0.1', server_port=1035, debug=True)
+        executor.submit(launch_ws_client, exe='kpt', server_host='127.0.0.1', server_port=1035, forward=':2042,127.0.0.1:2043', debug=True)
         executor.submit(launch_echo_server, port=2043)
         executor.submit(echo_client, connections=1, rounds=1, port=2042)
 
@@ -279,12 +281,14 @@ def main():
     parser.add_argument('-a', '--action', default='test')
     args = parser.parse_args()
 
-    recompile()
+
     if args.action == 'test':
+        recompile(exe='kptunnel')
         # test()
         reverse_websocket_ssh()
 
     if args.action == 'debug':
+        recompile(exe='kpt')
         debug()
 
 if __name__ == '__main__':

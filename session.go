@@ -49,21 +49,14 @@ func IsDebug() bool {
 }
 
 // combination of tcp to pass over tunnel
-type ForwardInfo struct {
-	// true if this is a reverse tunnel
-	IsReverseTunnel bool
-	// listening host:port
-	Src HostInfo
-	// forward host:port
-	Dst HostInfo
+type Forward struct {
+	Reverse bool     // true if this is a reverse tunnel
+	Src     HostInfo // listening host:port
+	Dest    HostInfo // forward host:port
 }
 
-func (info *ForwardInfo) toStr() string {
-	kind := "t"
-	if info.IsReverseTunnel {
-		kind = "r"
-	}
-	return fmt.Sprint("%s:%s:%s", kind, info.Src.toStr(), info.Dst.toStr())
+func (info *Forward) String() string {
+	return fmt.Sprintf("Forward(reverse=%t, %s => %s)", info.Reverse, info.Src.String(), info.Dest.String())
 }
 
 // tunnel control parameters
@@ -157,6 +150,11 @@ type ConnHeader struct {
 	HostInfo HostInfo
 	CitiId   uint32
 }
+
+func (ch ConnHeader) String() string {
+	return fmt.Sprintf("ConnectControl(host: %s, stream: %d)", ch.HostInfo.String(), ch.CitiId)
+}
+
 type CtrlRespHeader struct {
 	Result bool
 	Mess   string
@@ -1065,10 +1063,10 @@ func stream2Tunnel(src *ConnInTunnelInfo, info *pipeInfo, fin chan bool) {
 		readSize, readErr := src.conn.Read(buf)
 
 		src.WriteState = 30
-		log.Debug().Msgf("writeNo: %d, readSize: %s", src.WriteNo, readSize)
+		log.Debug().Msgf("writeNo: %d, readSize: %d", src.WriteNo, readSize)
 		if readErr != nil {
 			packChan <- PackInfo{make([]byte, 0), PACKET_KIND_NORMAL, src.citiId} // write 0 bytes data to the destination when the source is dead
-			log.Error().Msgf("fail to read into write ringBuffer, err %v, session writeNo=%d, err=%s", readErr, session.WriteNo)
+			log.Error().Msgf("fail to read into write ringBuffer, err: %v", readErr)
 			break
 		}
 		if readSize == 0 {
@@ -1477,45 +1475,38 @@ func NewPipeInfo(
 	return info, true
 }
 
-func startRelaySession(
-	connInfo *ConnInfo, interval int, citServerFlag bool,
-	reconnect func(sessionInfo *SessionInfo) *ConnInfo) *pipeInfo {
-
-	info, newSession := NewPipeInfo(connInfo, citServerFlag, reconnect)
-
+func startRelaySession(connInfo *ConnInfo, interval int, citServerFlag bool, reconnect func(sessionInfo *SessionInfo) *ConnInfo) *pipeInfo {
+	mux, isNewMux := NewPipeInfo(connInfo, citServerFlag, reconnect)
 	connInfo.SessionInfo.SetState(Session_state_connected)
-
-	if !newSession {
-		log.Printf("skip process reconnect -- %d", connInfo.SessionInfo.SessionId)
-		return info
+	if !isNewMux {
+		log.Printf("existing mux, no new mux routines, sessionId: %d", connInfo.SessionInfo.SessionId)
+		return mux
 	}
 
-	go packetWriter(info)
-	go packetReader(info)
+	go packetWriter(mux)
+	go packetReader(mux)
 	if PRE_ENC {
-		go packetEncrypter(info)
+		go packetEncrypter(mux)
 	}
+	go keepalive(mux, connInfo.SessionInfo, interval)
 
-	sessionInfo := connInfo.SessionInfo
+	return mux
+}
 
-	keepalive := func() {
-		// Once every 20 seconds to avoid disconnection due to no communication for a certain period of time
-		for !info.end {
-			for sleepTime := 0; sleepTime < interval; sleepTime += SLEEP_INTERVAL {
-				time.Sleep(SLEEP_INTERVAL * time.Millisecond)
-				if info.end {
-					break
-				}
-			}
-			if !info.connecting {
-				sessionInfo.packChan <- PackInfo{nil, PACKET_KIND_DUMMY, CITIID_CTRL}
+func keepalive(info *pipeInfo, sessionInfo *SessionInfo, interval int) {
+	// Once every 20 seconds to avoid disconnection due to no communication for a certain period of time
+	for !info.end {
+		for sleepTime := 0; sleepTime < interval; sleepTime += SLEEP_INTERVAL {
+			time.Sleep(SLEEP_INTERVAL * time.Millisecond)
+			if info.end {
+				break
 			}
 		}
-		log.Printf("end keepalive -- %d", sessionInfo.SessionId)
+		if !info.connecting {
+			sessionInfo.packChan <- PackInfo{nil, PACKET_KIND_DUMMY, CITIID_CTRL}
+		}
 	}
-	go keepalive()
-
-	return info
+	log.Printf("end keepalive -- %d", sessionInfo.SessionId)
 }
 
 // Interval for keep alive communication to avoid dead communication (ms)
@@ -1531,34 +1522,24 @@ const SLEEP_INTERVAL = 500
 // @param connInfo Tunnel connection information
 // Connection destination with @param local Tunnel
 // @param reconnect reconnection function
-func relaySession(info *pipeInfo, citi *ConnInTunnelInfo, hostInfo HostInfo) {
-	log.Print("connected")
+func relaySession(mux *pipeInfo, citi *ConnInTunnelInfo, hostInfo HostInfo) {
+	log.Print("local connection established")
 
 	fin := make(chan bool)
+	sessionInfo := mux.connInfo.SessionInfo
 
-	sessionInfo := info.connInfo.SessionInfo
-
-	go stream2Tunnel(citi, info, fin)
+	go stream2Tunnel(citi, mux, fin)
 	go tunnel2Stream(sessionInfo, citi, fin)
 
 	<-fin
-	citi.conn.Close()
+	_ = citi.conn.Close()
 	<-fin
-	log.Printf(
-		"close citi: sessionId %d, citiId %d, read %d, write %d",
-		sessionInfo.SessionId, citi.citiId, citi.ReadSize, citi.WriteSize)
-	log.Printf(
-		"close citi: readNo %d, writeNo %d, readPackChan %d",
-		citi.ReadNo, citi.WriteNo, len(citi.readPackChan))
-	log.Printf(
-		"close citi: session readNo %d, session writeNo %d",
-		sessionInfo.ReadNo, sessionInfo.WriteNo)
-	log.Printf(
-		"waittime: stream2Tunnel %s, tunnel2Stream %s, packetWriter %s, packetReader %s\n",
-		citi.waitTimeInfo.stream2Tunnel,
-		citi.waitTimeInfo.tunnel2Stream,
-		sessionInfo.packetWriterWaitTime,
-		citi.waitTimeInfo.packetReader)
+
+	log.Printf("close citi: sessionId %d, citiId %d, read %d, write %d", sessionInfo.SessionId, citi.citiId, citi.ReadSize, citi.WriteSize)
+	log.Printf("close citi: readNo %d, writeNo %d, readPackChan %d", citi.ReadNo, citi.WriteNo, len(citi.readPackChan))
+	log.Printf("close citi: session readNo %d, session writeNo %d", sessionInfo.ReadNo, sessionInfo.WriteNo)
+	log.Printf("wait time: stream2Tunnel %s, tunnel2Stream %s, packetWriter %s, packetReader %s", citi.waitTimeInfo.stream2Tunnel,
+		citi.waitTimeInfo.tunnel2Stream, sessionInfo.packetWriterWaitTime, citi.waitTimeInfo.packetReader)
 
 	// sessionInfo.packChan <- PackInfo { nil, PACKET_KIND_EOS, CITIID_CTRL } // pending
 }
@@ -1627,7 +1608,7 @@ type Listener interface {
 
 type ListenInfo struct {
 	listener    Listener
-	forwardInfo ForwardInfo
+	forwardInfo Forward
 }
 
 func (info *ListenInfo) Close() {
@@ -1644,7 +1625,7 @@ func (group *ListenGroup) Close() {
 	}
 }
 
-func NewListen(isClient bool, forwardList []ForwardInfo) (*ListenGroup, []ForwardInfo) {
+func NewListen(isClient bool, forwardList []Forward) (*ListenGroup, []Forward) {
 	return NewListenWithMaker(
 		isClient, forwardList,
 		func(dst string) (Listener, error) {
@@ -1657,18 +1638,18 @@ func NewListen(isClient bool, forwardList []ForwardInfo) (*ListenGroup, []Forwar
 }
 
 func NewListenWithMaker(
-	isClient bool, forwardList []ForwardInfo,
-	listenMaker func(dst string) (Listener, error)) (*ListenGroup, []ForwardInfo) {
+	isClient bool, forwardList []Forward,
+	listenMaker func(dst string) (Listener, error)) (*ListenGroup, []Forward) {
 	group := ListenGroup{[]ListenInfo{}}
-	localForward := []ForwardInfo{}
+	localForward := []Forward{}
 
 	for _, forwardInfo := range forwardList {
-		if isClient && !forwardInfo.IsReverseTunnel ||
-			!isClient && forwardInfo.IsReverseTunnel {
-			local, err := listenMaker(forwardInfo.Src.toStr())
+		if isClient && !forwardInfo.Reverse ||
+			!isClient && forwardInfo.Reverse {
+			local, err := listenMaker(forwardInfo.Src.String())
 			if err != nil {
 				log.Fatal().Err(err)
-				return nil, []ForwardInfo{}
+				return nil, []Forward{}
 			}
 			group.list = append(group.list, ListenInfo{local, forwardInfo})
 		} else {
@@ -1679,114 +1660,19 @@ func NewListenWithMaker(
 	return &group, localForward
 }
 
-func ListenNewConnectSub(
-	listenInfo ListenInfo, info *pipeInfo) {
-
-	process := func() {
-		log.Printf("waiting with %s for %s\n",
-			listenInfo.forwardInfo.Src.toStr(),
-			listenInfo.forwardInfo.Dst.toStr())
-		src, err := listenInfo.listener.Accept()
-		if err != nil {
-			log.Fatal().Err(err)
-		}
-		needClose := true
-		defer func() {
-			if needClose {
-				src.Close()
-			}
-		}()
-
-		log.Printf(
-			"Accept -- %s -> %s",
-			listenInfo.forwardInfo.Src.toStr(), listenInfo.forwardInfo.Dst.toStr())
-
-		citi := info.connInfo.SessionInfo.addCiti(src, CITIID_CTRL)
-		dst := listenInfo.forwardInfo.Dst
-
-		connInfo := info.connInfo
-		var buffer bytes.Buffer
-		buffer.Write([]byte{CTRL_HEADER})
-		bytes, _ := json.Marshal(&ConnHeader{dst, citi.citiId})
-		buffer.Write(bytes)
-
-		connInfo.SessionInfo.packChan <- PackInfo{
-			buffer.Bytes(), PACKET_KIND_NORMAL, CITIID_CTRL}
-
-		respHeader := <-citi.respHeader
-		if respHeader.Result {
-			go relaySession(info, citi, dst)
-			needClose = false
-		} else {
-			log.Printf("failed to connect -- %s:%s", dst.toStr(), respHeader.Mess)
-		}
-	}
-
-	for {
-		process()
-	}
-}
-
 // Wait for a session to pass through Tunnel & connect to the communication destination of the session
 //
 // @param connInfo Tunnel
 // @param port Listening port number
 // @param parm tunnel information
 // @param reconnect reconnection function
-func ListenAndNewConnect(
-	isClient bool,
-	listenGroup *ListenGroup, localForwardList []ForwardInfo,
-	connInfo *ConnInfo, param *TunnelParam,
+func ListenAndNewConnect(isClient bool, listenGroup *ListenGroup, localForwardList []Forward, connInfo *ConnInfo, param *TunnelParam,
 	reconnect func(sessionInfo *SessionInfo) *ConnInfo) {
 
-	ListenAndNewConnectWithDialer(
-		isClient, listenGroup, localForwardList, connInfo, param, reconnect,
-		func(dst string) (io.ReadWriteCloser, error) {
-			log.Printf("dial -- %s", dst)
-			return net.Dial("tcp", dst)
-		})
-}
-
-func ListenAndNewConnectWithDialer(
-	isClient bool,
-	listenGroup *ListenGroup, localForwardList []ForwardInfo,
-	connInfo *ConnInfo, param *TunnelParam,
-	reconnect func(sessionInfo *SessionInfo) *ConnInfo,
-	dialer func(dst string) (io.ReadWriteCloser, error)) {
-	log.Printf(
-		"ListenAndNewConnect -- %d, %d",
-		len(listenGroup.list), len(localForwardList))
-
-	info := startRelaySession(
-		connInfo, param.keepAliveInterval, len(listenGroup.list) > 0, reconnect)
-
-	for _, listenInfo := range listenGroup.list {
-		go ListenNewConnectSub(listenInfo, info)
-	}
-	if len(localForwardList) > 0 {
-		for {
-			header := connInfo.SessionInfo.getHeader()
-
-			if header == nil {
-				break
-			}
-			go NewConnect(dialer, header, info)
-		}
-	}
-	if len(listenGroup.list) > 0 {
-		for {
-			log.Printf("wait releaseChan")
-			if !<-connInfo.SessionInfo.releaseChan {
-				break
-			}
-			log.Printf("isClient -- %v", isClient)
-			if !isClient {
-				break
-			}
-		}
-	}
-	log.Printf("disconnected")
-	connInfo.SessionInfo.SetState(Session_state_disconnected)
+	ListenAndNewConnectWithDialer(isClient, listenGroup, localForwardList, connInfo, param, reconnect, func(dst string) (io.ReadWriteCloser, error) {
+		log.Printf("dial -- %s", dst)
+		return net.Dial("tcp", dst)
+	})
 }
 
 // Listen for sessions to pass over the Tunnel and handle started sessions.
@@ -1795,34 +1681,34 @@ func ListenAndNewConnectWithDialer(
 // @param port Listening port number
 // @param parm tunnel information
 // @param reconnect reconnection function
-func ListenNewConnect(
-	listenGroup *ListenGroup, connInfo *ConnInfo, param *TunnelParam, loop bool,
-	reconnect func(sessionInfo *SessionInfo) *ConnInfo) {
-
-	info := startRelaySession(connInfo, param.keepAliveInterval, true, reconnect)
-
-	for _, listenInfo := range listenGroup.list {
-		go ListenNewConnectSub(listenInfo, info)
-	}
-
-	for {
-		if !<-connInfo.SessionInfo.releaseChan {
-			break
-		}
-		if !loop {
-			break
-		}
-	}
-	log.Printf("disconnected")
-	connInfo.SessionInfo.SetState(Session_state_disconnected)
-}
+//func ListenNewConnect(
+//	listenGroup *ListenGroup, connInfo *ConnInfo, param *TunnelParam, loop bool,
+//	reconnect func(sessionInfo *SessionInfo) *ConnInfo) {
+//
+//	info := startRelaySession(connInfo, param.keepAliveInterval, true, reconnect)
+//
+//	for _, listenInfo := range listenGroup.list {
+//		go acceptAndProcessInfinitely(listenInfo, info)
+//	}
+//
+//	for {
+//		if !<-connInfo.SessionInfo.releaseChan {
+//			break
+//		}
+//		if !loop {
+//			break
+//		}
+//	}
+//	log.Printf("disconnected")
+//	connInfo.SessionInfo.SetState(Session_state_disconnected)
+//}
 
 func NewConnect(
 	dialer func(dst string) (io.ReadWriteCloser, error),
 	header *ConnHeader, info *pipeInfo) {
 	log.Print("header ", header)
 
-	dstAddr := header.HostInfo.toStr()
+	dstAddr := header.HostInfo.String()
 	dst, err := dialer(dstAddr)
 	log.Print("NewConnect -- %s", dstAddr)
 

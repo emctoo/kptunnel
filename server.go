@@ -13,7 +13,7 @@ import (
 )
 
 func StartBotServer(serverInfo HostInfo) {
-	server := serverInfo.toStr()
+	server := serverInfo.String()
 	log.Print("start echo --- ", server)
 	local, err := net.Listen("tcp", server)
 	if err != nil {
@@ -50,7 +50,7 @@ func StartBotServer(serverInfo HostInfo) {
 }
 
 func StartEchoServer(serverInfo HostInfo) {
-	server := serverInfo.toStr()
+	server := serverInfo.String()
 	log.Print("start echo --- ", server)
 	local, err := net.Listen("tcp", server)
 	if err != nil {
@@ -72,7 +72,7 @@ func StartEchoServer(serverInfo HostInfo) {
 }
 
 func StartHeavyClient(serverInfo HostInfo) {
-	conn, err := net.Dial("tcp", serverInfo.toStr())
+	conn, err := net.Dial("tcp", serverInfo.String())
 	if err != nil {
 		log.Fatal().Err(err)
 	}
@@ -124,8 +124,8 @@ func StartHeavyClient(serverInfo HostInfo) {
 }
 
 func processTcpServer(
-	conn net.Conn, param *TunnelParam, forwardList []ForwardInfo,
-	process func(*ConnInfo, *ListenGroup, []ForwardInfo)) {
+	conn net.Conn, param *TunnelParam, forwardList []Forward,
+	process func(*ConnInfo, *ListenGroup, []Forward)) {
 	defer conn.Close()
 
 	remoteAddr := fmt.Sprintf("%s", conn.RemoteAddr())
@@ -142,7 +142,7 @@ func processTcpServer(
 		conn, tunnelParam.encPass, tunnelParam.encCount, nil, true)
 	//newSession := false
 	remoteAddrTxt := fmt.Sprintf("%s", conn.RemoteAddr())
-	var retForwardList []ForwardInfo
+	var retForwardList []Forward
 	var err error
 	if _, retForwardList, err = ProcessServerAuth(
 		connInfo, &tunnelParam, remoteAddrTxt, forwardList); err != nil {
@@ -160,8 +160,8 @@ func processTcpServer(
 }
 
 func listenTcpServer(
-	local net.Listener, param *TunnelParam, forwardList []ForwardInfo,
-	process func(*ConnInfo, *ListenGroup, []ForwardInfo)) {
+	local net.Listener, param *TunnelParam, forwardList []Forward,
+	process func(*ConnInfo, *ListenGroup, []Forward)) {
 	conn, err := local.Accept()
 	if err != nil {
 		log.Fatal().Err(err)
@@ -170,9 +170,9 @@ func listenTcpServer(
 	go processTcpServer(conn, param, forwardList, process)
 }
 
-func StartServer(param *TunnelParam, forwardList []ForwardInfo) {
-	log.Print("waiting --- ", param.serverInfo.toStr())
-	local, err := net.Listen("tcp", param.serverInfo.toStr())
+func StartServer(param *TunnelParam, forwardList []Forward) {
+	log.Print("waiting --- ", param.serverInfo.String())
+	local, err := net.Listen("tcp", param.serverInfo.String())
 	if err != nil {
 		log.Fatal().Err(err)
 	}
@@ -181,7 +181,7 @@ func StartServer(param *TunnelParam, forwardList []ForwardInfo) {
 	for {
 		listenTcpServer(local, param, forwardList,
 			func(connInfo *ConnInfo,
-				listenGroup *ListenGroup, localForwardList []ForwardInfo) {
+				listenGroup *ListenGroup, localForwardList []Forward) {
 				ListenAndNewConnect(
 					false, listenGroup, localForwardList,
 					connInfo, param, GetSessionConn)
@@ -189,9 +189,9 @@ func StartServer(param *TunnelParam, forwardList []ForwardInfo) {
 	}
 }
 
-func StartReverseServer(param *TunnelParam, forwardList []ForwardInfo) {
-	log.Print("waiting reverse --- ", param.serverInfo.toStr())
-	local, err := net.Listen("tcp", param.serverInfo.toStr())
+func StartReverseServer(param *TunnelParam, forwardList []Forward) {
+	log.Print("waiting reverse --- ", param.serverInfo.String())
+	local, err := net.Listen("tcp", param.serverInfo.String())
 	if err != nil {
 		log.Fatal().Err(err)
 	}
@@ -200,7 +200,7 @@ func StartReverseServer(param *TunnelParam, forwardList []ForwardInfo) {
 	for {
 		listenTcpServer(local, param, forwardList,
 			func(connInfo *ConnInfo,
-				listenGroup *ListenGroup, localForwardList []ForwardInfo) {
+				listenGroup *ListenGroup, localForwardList []Forward) {
 				ListenAndNewConnect(
 					false, listenGroup, localForwardList,
 					connInfo, param, GetSessionConn)
@@ -243,8 +243,8 @@ func (handler WrapWSHandler) ServeHTTP(w http.ResponseWriter, req *http.Request)
 }
 
 func execWebSocketServer(
-	param TunnelParam, forwardList []ForwardInfo,
-	connectSession func(*ConnInfo, *TunnelParam, *ListenGroup, []ForwardInfo)) {
+	param TunnelParam, forwardList []Forward,
+	connectSession func(*ConnInfo, *TunnelParam, *ListenGroup, []Forward)) {
 
 	// Handler for WebSocket connection
 	handle := func(ws *websocket.Conn, remoteAddr string) {
@@ -269,32 +269,32 @@ func execWebSocketServer(
 	wrapHandler := WrapWSHandler{handle, &param}
 
 	http.Handle("/", wrapHandler)
-	err := http.ListenAndServe(param.serverInfo.toStr(), nil)
+	err := http.ListenAndServe(param.serverInfo.String(), nil)
 	if err != nil {
 		panic("ListenAndServe: " + err.Error())
 	}
 }
 
-func StartWebsocketServer(param *TunnelParam, forwardList []ForwardInfo) {
-	log.Print("start websocket -- ", param.serverInfo.toStr())
+func StartWebsocketServer(param *TunnelParam, forwardList []Forward) {
+	log.Print("start websocket -- ", param.serverInfo.String())
 
 	execWebSocketServer(
 		*param, forwardList,
 		func(connInfo *ConnInfo, tunnelParam *TunnelParam,
-			listenGroup *ListenGroup, localForwardList []ForwardInfo) {
+			listenGroup *ListenGroup, localForwardList []Forward) {
 			ListenAndNewConnect(
 				false, listenGroup, localForwardList,
 				connInfo, tunnelParam, GetSessionConn)
 		})
 }
 
-func StartReverseWebSocketServer(param *TunnelParam, forwardList []ForwardInfo) {
-	log.Print("start reverse websocket -- ", param.serverInfo.toStr())
+func StartReverseWebSocketServer(param *TunnelParam, forwardList []Forward) {
+	log.Print("start reverse websocket -- ", param.serverInfo.String())
 
 	execWebSocketServer(
 		*param, forwardList,
 		func(connInfo *ConnInfo, tunnelParam *TunnelParam,
-			listenGroup *ListenGroup, localForwardList []ForwardInfo) {
+			listenGroup *ListenGroup, localForwardList []Forward) {
 			ListenAndNewConnect(
 				false, listenGroup, localForwardList,
 				connInfo, tunnelParam, GetSessionConn)

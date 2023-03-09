@@ -116,7 +116,7 @@ func main() {
 }
 
 func ParseOpt(
-	cmd *flag.FlagSet, mode string, args []string) (*TunnelParam, []ForwardInfo, func()) {
+	cmd *flag.FlagSet, mode string, args []string) (*TunnelParam, []Forward, func()) {
 
 	needForward := false
 	if mode == "r-server" || mode == "r-wsserver" ||
@@ -251,7 +251,7 @@ func ParseOpt(
 		isReverseTunnel = true
 	}
 
-	forwardList := []ForwardInfo{}
+	forwardList := []Forward{}
 	for _, arg := range nonFlagArgs[1:] {
 		isReverseForward := isReverseTunnel
 		tokenList := strings.Split(arg, ",")
@@ -283,8 +283,8 @@ func ParseOpt(
 		}
 		forwardList = append(
 			forwardList,
-			ForwardInfo{
-				IsReverseTunnel: isReverseForward, Src: *srcInfo, Dst: *remoteInfo})
+			Forward{
+				Reverse: isReverseForward, Src: *srcInfo, Dest: *remoteInfo})
 	}
 	if !*omitForward && len(forwardList) == 0 {
 		if mode == "r-server" || mode == "r-wsserver" ||

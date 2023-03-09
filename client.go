@@ -16,7 +16,7 @@ import (
 
 func connectTunnel(
 	serverInfo HostInfo,
-	param *TunnelParam, forwardList []ForwardInfo) ([]ForwardInfo, ReconnectInfo) {
+	param *TunnelParam, forwardList []Forward) ([]Forward, ReconnectInfo) {
 	log.Printf("start client --- %d", serverInfo.Port)
 	tunnel, err := net.Dial("tcp", fmt.Sprintf("%s:%d", serverInfo.Name, serverInfo.Port))
 	if err != nil {
@@ -37,7 +37,7 @@ func connectTunnel(
 	return overrideForwardList, ReconnectInfo{connInfo, true, err}
 }
 
-func StartClient(param *TunnelParam, forwardList []ForwardInfo) {
+func StartClient(param *TunnelParam, forwardList []Forward) {
 
 	process := func() bool {
 		sessionParam := *param
@@ -102,11 +102,11 @@ func StartReverseClient(param *TunnelParam) {
 
 func StartWebSocketClient(
 	userAgent string, param *TunnelParam,
-	serverInfo HostInfo, proxyHost string, forwardList []ForwardInfo) {
+	serverInfo HostInfo, proxyHost string, forwardList []Forward) {
 
 	sessionParam := *param
 	forwardList, reconnectInfo := ConnectWebScoket(
-		serverInfo.toStr(), proxyHost, userAgent, &sessionParam, nil, forwardList)
+		serverInfo.String(), proxyHost, userAgent, &sessionParam, nil, forwardList)
 	if reconnectInfo.Err != nil {
 		return
 	}
@@ -115,7 +115,7 @@ func StartWebSocketClient(
 	listenGroup, localForwardList := NewListen(true, forwardList)
 	defer listenGroup.Close()
 
-	reconnectUrl := serverInfo.toStr()
+	reconnectUrl := serverInfo.String()
 	if serverInfo.Query != "" {
 		reconnectUrl += "&"
 	}
@@ -138,7 +138,7 @@ func StartReverseWebSocketClient(
 
 	sessionParam := *param
 
-	reconnectUrl := serverInfo.toStr()
+	reconnectUrl := serverInfo.String()
 	if serverInfo.Query != "" {
 		reconnectUrl += "&"
 	}
@@ -154,7 +154,7 @@ func StartReverseWebSocketClient(
 
 	process := func() {
 		forwardList, reconnectInfo := ConnectWebScoket(
-			serverInfo.toStr(), proxyHost, userAgent, &sessionParam, nil, []ForwardInfo{})
+			serverInfo.String(), proxyHost, userAgent, &sessionParam, nil, []Forward{})
 		if reconnectInfo.Err != nil {
 			return
 		}
