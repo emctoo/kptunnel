@@ -135,7 +135,7 @@ def launch_ws_reverse_server(server_host: string, server_port: int, forwards, de
     log.info('kpt compiled')
 
     log.info('listening on :%s', server_port)
-    cmd =  ['./kptunnel', 'r-wsserver', ':34022', *forwards, '-pass', 'cpass', '-encPass', 'tpass']
+    cmd =  ['./kptunnel', 'r-wsserver', f':{server_port}', *forwards, '-pass', 'cpass', '-encPass', 'tpass']
     with subprocess.Popen(cmd, stdout=subprocess.PIPE) as p:
         for line in p.stdout:
             j = json.loads(line.strip())
@@ -155,8 +155,8 @@ def launch_ws_reverse_client(server_host, server_port, forward, debug=False, mod
     subprocess.run(['go', 'build'])
     log.info('kpt compiled')
 
-    log.info('connect to 34.d1f.xyz, forward: %s', forward)
-    cmd =  ['./kptunnel', 'r-wsclient', '34.d1f.xyz:443', '-tls', '-wspath', '/ws', '-pass', 'cpass', '-encPass', 'tpass']
+    log.info('connect to %s:%s, forward: %s', server_host, server_port, forward)
+    cmd =  ['./kptunnel', 'r-wsclient', f'{server_host}:{server_port}', '-tls', '-wspath', '/ws', '-pass', 'cpass', '-encPass', 'tpass']
     with subprocess.Popen(cmd, stdout=subprocess.PIPE) as p:
         for line in p.stdout:
             j = json.loads(line.strip())
@@ -172,16 +172,18 @@ def launch_ws_reverse_client(server_host, server_port, forward, debug=False, mod
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-m', '--mode', default='test')
+    parser.add_argument('--host', type=str, default='46.d1f.xyz')
+    parser.add_argument('--port', type=int, default=443)
     parser.add_argument('-f', '--forwards', type=str, nargs='*', default=[]) # collect all as a list: -f a b => [a, b]
     args = parser.parse_args()
     if args.mode == 'client':
         while True:
-            launch_ws_reverse_client('34.d1f.xyz', 443, [], debug=True)
+            launch_ws_reverse_client(args.host, args.port, [], debug=True)
             time.sleep(3)
     if args.mode == 'server':
-        print(f'extra forwards: {args.forwards}')
         forwards = [':2222,localhost:2222', ':2223,localhost:2223', ':2224,localhost:2224', *args.forwards]
-        launch_ws_reverse_server('127.0.0.1', 34022, forwards, debug=True, mode='r-wsserver')
+        print(f"forwards: {forwards}")
+        launch_ws_reverse_server('127.0.0.1', args.port, forwards, debug=True, mode='r-wsserver')
 
 if __name__ == '__main__':
     main()
