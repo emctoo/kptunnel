@@ -178,6 +178,7 @@ def main():
     parser.add_argument('-f', '--forwards', type=str, nargs='*', default=[]) # collect all as a list: -f a b => [a, b]
     args = parser.parse_args()
     print(f'mode: {args.mode}')
+
     if args.mode == 'ws-client':
         while True:
             launch_ws_reverse_client(args.host, args.port, [], debug=True)
@@ -189,6 +190,7 @@ def main():
             time.sleep(3)
 
     if args.mode == 'ws-server':
+        # ports for pwsh, pwsh/admin, console
         forwards = [':2222,localhost:2222', ':2223,localhost:2223', ':2224,localhost:2224', *args.forwards]
         print(f"forwards: {forwards}")
         launch_ws_reverse_server('127.0.0.1', 34022, forwards, debug=True, mode='r-wsserver')
